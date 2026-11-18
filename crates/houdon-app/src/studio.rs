@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use houdon_core::{LengthUnit, LoadError, Model, ModelId, OrbitCamera, Scene, UnitSystem};
+use houdon_core::{
+    LengthUnit, LoadError, Model, ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
+};
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
 
@@ -378,7 +380,6 @@ impl Studio {
         let mut changed = false;
 
         ui.label(tr.tr("studio-position"));
-        let unit = format!(" {}", tr.tr(unit_message_id(self.units.editing_unit())));
         let units = self.units;
         ui.horizontal(|ui| {
             for (axis, value) in [
@@ -387,19 +388,7 @@ impl Studio {
                 ("Z", &mut transform.translation.z),
             ] {
                 ui.label(axis);
-                let mut shown = units.to_editing(*value);
-                let edited = ui
-                    .add(
-                        egui::DragValue::new(&mut shown)
-                            .speed(0.01)
-                            .suffix(unit.as_str())
-                            .max_decimals(3),
-                    )
-                    .changed();
-                if edited {
-                    *value = units.from_editing(shown);
-                    changed = true;
-                }
+                changed |= length_field(ui, tr, units, value, -10_000.0..=10_000.0);
             }
         });
 
@@ -442,27 +431,27 @@ impl Studio {
             return;
         };
         if self.scene.needs_real_size(model) {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                tr.tr("studio-real-size-warning"),
+            let warning = tr.tr_args(
+                "studio-real-size-warning",
+                &[
+                    (
+                        "smallest",
+                        format_length(tr, self.units, *PLAUSIBLE_SIZE.start()).into(),
+                    ),
+                    (
+                        "largest",
+                        format_length(tr, self.units, *PLAUSIBLE_SIZE.end()).into(),
+                    ),
+                ],
             );
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
         }
-        let units = self.units;
-        let unit = format!(" {}", tr.tr(unit_message_id(units.editing_unit())));
-        let mut shown = units.to_editing(real_size);
+        let mut metres = real_size;
         ui.horizontal(|ui| {
-            let edited = ui
-                .add(
-                    egui::DragValue::new(&mut shown)
-                        .speed(0.01)
-                        .range(0.001..=10_000.0)
-                        .suffix(unit.as_str())
-                        .max_decimals(3),
-                )
-                .changed();
+            let edited = length_field(ui, tr, self.units, &mut metres, 0.001..=10_000.0);
             ui.label(tr.tr("studio-real-size"));
             if edited {
-                self.scene.set_real_size(model, units.from_editing(shown));
+                self.scene.set_real_size(model, metres);
             }
         });
     }
@@ -553,12 +542,40 @@ fn format_length(tr: &Localizer, units: UnitSystem, metres: f32) -> String {
         LengthUnit::Metre | LengthUnit::Foot => 2,
         LengthUnit::Centimetre | LengthUnit::Inch => 1,
     };
-    format!(
-        "{:.*} {}",
-        decimals,
-        length.value,
-        tr.tr(unit_message_id(length.unit))
+    tr.tr_args(
+        "length",
+        &[
+            ("value", format!("{:.*}", decimals, length.value).into()),
+            ("unit", tr.tr(unit_message_id(length.unit)).into()),
+        ],
     )
+}
+
+/// A number field for a length kept in metres, shown and typed in the
+/// editing unit of `units` (metres or feet). `range` is in metres.
+/// Returns whether the artist changed it.
+pub fn length_field(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    units: UnitSystem,
+    metres: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) -> bool {
+    let suffix = format!(" {}", tr.tr(unit_message_id(units.editing_unit())));
+    let mut shown = units.to_editing(*metres);
+    let changed = ui
+        .add(
+            egui::DragValue::new(&mut shown)
+                .speed(0.01)
+                .range(units.to_editing(*range.start())..=units.to_editing(*range.end()))
+                .suffix(suffix)
+                .max_decimals(3),
+        )
+        .changed();
+    if changed {
+        *metres = units.from_editing(shown);
+    }
+    changed
 }
 
 /// Snaps values that are zero up to rounding to exactly 0, so they do not
@@ -578,4 +595,21 @@ fn extension(name: &str) -> String {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use houdon_i18n::Language;
+
+    #[test]
+    fn lengths_read_in_the_chosen_units_and_language() {
+        let en = Localizer::new(Language::English);
+        assert_eq!(format_length(&en, UnitSystem::Metric, 1.75), "1.75 m");
+        assert_eq!(format_length(&en, UnitSystem::Metric, 0.2), "20.0 cm");
+        assert_eq!(format_length(&en, UnitSystem::Imperial, 1.8288), "6.00 ft");
+        assert_eq!(format_length(&en, UnitSystem::Imperial, 0.0254), "1.0 in");
+        let ru = Localizer::new(Language::Russian);
+        assert_eq!(format_length(&ru, UnitSystem::Metric, 0.2), "20.0 см");
+    }
 }

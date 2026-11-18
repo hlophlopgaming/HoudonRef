@@ -86,7 +86,7 @@ struct ModelEntry {
 }
 
 /// Sizes outside this range, in metres, are taken for wrong file units.
-const PLAUSIBLE_SIZE: std::ops::RangeInclusive<f32> = 0.01..=100.0;
+pub const PLAUSIBLE_SIZE: std::ops::RangeInclusive<f32> = 0.01..=100.0;
 
 /// The light of the scene: one key light and ambient light, in linear colour.
 ///
@@ -782,6 +782,15 @@ mod tests {
         assert!(scene.needs_real_size(tiny));
         assert!(!scene.needs_real_size(fine));
         assert!(scene.needs_real_size(huge));
+    }
+
+    #[test]
+    fn the_real_size_limits_themselves_are_plausible() {
+        let mut scene = Scene::new();
+        for (size, asks) in [(0.0099, true), (0.01, false), (100.0, false), (100.5, true)] {
+            let model = scene.add_model(cube(size));
+            assert_eq!(scene.needs_real_size(model), asks, "{size} m");
+        }
     }
 
     #[test]

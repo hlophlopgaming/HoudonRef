@@ -5,7 +5,7 @@ use houdon_core::model::DEFAULT_FIGURE_HEIGHT;
 use houdon_i18n::{Language, Localizer};
 use serde::{Deserialize, Serialize};
 
-use crate::studio::{Studio, unit_message_id};
+use crate::studio::{Studio, length_field};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Section {
@@ -119,23 +119,8 @@ impl HoudonApp {
                     ui.radio_value(&mut self.units, units, tr.tr(units_message_id(units)));
                 }
                 ui.separator();
-                let unit = format!(" {}", tr.tr(unit_message_id(self.units.editing_unit())));
-                let mut shown = self.units.to_editing(self.figure_height);
-                let range = self.units.to_editing(*FIGURE_HEIGHTS.start())
-                    ..=self.units.to_editing(*FIGURE_HEIGHTS.end());
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut shown)
-                                .speed(0.01)
-                                .range(range)
-                                .suffix(unit.as_str())
-                                .max_decimals(2),
-                        )
-                        .changed()
-                    {
-                        self.figure_height = self.units.from_editing(shown);
-                    }
+                    length_field(ui, tr, self.units, &mut self.figure_height, FIGURE_HEIGHTS);
                     ui.label(tr.tr("settings-figure-height"));
                 });
             });
