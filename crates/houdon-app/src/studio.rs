@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use houdon_core::{LoadError, Model, ModelId, OrbitCamera, Scene, model::DEFAULT_FIGURE_HEIGHT};
+use houdon_core::{LengthUnit, LoadError, Model, ModelId, OrbitCamera, Scene, UnitSystem};
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
 
@@ -61,6 +61,8 @@ pub struct Studio {
     message: Option<String>,
     /// Files whose bytes arrive asynchronously (always on the web).
     incoming: Arc<Mutex<Vec<FileResult>>>,
+    /// How lengths are shown; an app setting, not part of the scene.
+    units: UnitSystem,
 }
 
 impl Studio {
@@ -71,6 +73,7 @@ impl Studio {
             pending_frame: Some(FrameTarget::Scene),
             message: None,
             incoming: Arc::default(),
+            units: UnitSystem::default(),
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -92,9 +95,7 @@ impl Studio {
         let model_id = match known {
             Some(id) => id,
             None => {
-                let mut model = load()?;
-                model.normalize_to_height(DEFAULT_FIGURE_HEIGHT);
-                let id = self.scene.add_model(model);
+                let id = self.scene.add_model(load()?);
                 self.sources.insert(source, id);
                 id
             }
@@ -171,6 +172,12 @@ impl Studio {
                 }
             }
         }
+    }
+
+    /// Applies the app settings that affect the Studio.
+    pub fn apply_settings(&mut self, units: UnitSystem, figure_height: f32) {
+        self.units = units;
+        self.scene.set_figure_height(figure_height);
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -338,19 +345,41 @@ impl Studio {
         let Some(object) = self.scene.object(id) else {
             return;
         };
-        if let Some(model) = self.scene.model(object.model) {
+        let model_id = object.model;
+        let mut figure = object.figure;
+        if let Some(model) = self.scene.model(model_id) {
             ui.weak(tr.tr_args(
                 "model-stats",
                 &[("triangles", model.triangle_count().into())],
             ));
         }
+        let size = self.scene.object_bounds(object).size();
+        ui.weak(tr.tr_args(
+            "studio-dimensions",
+            &[
+                ("width", format_length(tr, self.units, size.x).into()),
+                ("height", format_length(tr, self.units, size.y).into()),
+                ("depth", format_length(tr, self.units, size.z).into()),
+            ],
+        ));
+        if ui.checkbox(&mut figure, tr.tr("studio-figure")).changed() {
+            self.scene.set_figure(id, figure);
+        }
+        if !figure {
+            self.real_size_editor(ui, tr, model_id);
+        }
+
+        let Some(object) = self.scene.object(id) else {
+            return;
+        };
         let mut transform = object.transform;
         // Show tiny rounding leftovers as 0 instead of "-0.00".
         transform.translation = transform.translation.map(snap_to_zero);
         let mut changed = false;
 
         ui.label(tr.tr("studio-position"));
-        let metres = format!(" {}", tr.tr("unit-metre-short"));
+        let unit = format!(" {}", tr.tr(unit_message_id(self.units.editing_unit())));
+        let units = self.units;
         ui.horizontal(|ui| {
             for (axis, value) in [
                 ("X", &mut transform.translation.x),
@@ -358,14 +387,19 @@ impl Studio {
                 ("Z", &mut transform.translation.z),
             ] {
                 ui.label(axis);
-                changed |= ui
+                let mut shown = units.to_editing(*value);
+                let edited = ui
                     .add(
-                        egui::DragValue::new(value)
+                        egui::DragValue::new(&mut shown)
                             .speed(0.01)
-                            .suffix(metres.as_str())
+                            .suffix(unit.as_str())
                             .max_decimals(3),
                     )
                     .changed();
+                if edited {
+                    *value = units.from_editing(shown);
+                    changed = true;
+                }
             }
         });
 
@@ -399,6 +433,38 @@ impl Studio {
         if changed {
             self.scene.set_transform(id, transform);
         }
+    }
+
+    /// Shows and edits the real size of a model not shown as a Figure, and
+    /// warns when its file units look wrong.
+    fn real_size_editor(&mut self, ui: &mut egui::Ui, tr: &Localizer, model: ModelId) {
+        let Some(real_size) = self.scene.real_size(model) else {
+            return;
+        };
+        if self.scene.needs_real_size(model) {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                tr.tr("studio-real-size-warning"),
+            );
+        }
+        let units = self.units;
+        let unit = format!(" {}", tr.tr(unit_message_id(units.editing_unit())));
+        let mut shown = units.to_editing(real_size);
+        ui.horizontal(|ui| {
+            let edited = ui
+                .add(
+                    egui::DragValue::new(&mut shown)
+                        .speed(0.01)
+                        .range(0.001..=10_000.0)
+                        .suffix(unit.as_str())
+                        .max_decimals(3),
+                )
+                .changed();
+            ui.label(tr.tr("studio-real-size"));
+            if edited {
+                self.scene.set_real_size(model, units.from_editing(shown));
+            }
+        });
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui, _tr: &Localizer) {
@@ -468,6 +534,31 @@ impl Studio {
             },
         ));
     }
+}
+
+/// Message id of a unit's short name.
+pub fn unit_message_id(unit: LengthUnit) -> &'static str {
+    match unit {
+        LengthUnit::Centimetre => "unit-centimetre-short",
+        LengthUnit::Metre => "unit-metre-short",
+        LengthUnit::Inch => "unit-inch-short",
+        LengthUnit::Foot => "unit-foot-short",
+    }
+}
+
+/// A length in the most readable unit of `units`, such as "1.75 m" or "20 cm".
+fn format_length(tr: &Localizer, units: UnitSystem, metres: f32) -> String {
+    let length = units.readable(metres);
+    let decimals = match length.unit {
+        LengthUnit::Metre | LengthUnit::Foot => 2,
+        LengthUnit::Centimetre | LengthUnit::Inch => 1,
+    };
+    format!(
+        "{:.*} {}",
+        decimals,
+        length.value,
+        tr.tr(unit_message_id(length.unit))
+    )
 }
 
 /// Snaps values that are zero up to rounding to exactly 0, so they do not

@@ -46,3 +46,16 @@ unit-metre-short = м
 unit-millimetre-short = мм
 model-male-figure = мужская фигура
 model-female-figure = женская фигура
+
+settings = Настройки
+settings-units = Единицы измерения
+units-metric = Метрические (см, м)
+units-imperial = Имперские (дюймы, футы)
+settings-figure-height = Рост фигуры
+studio-figure = Фигура человека (рост из настроек)
+studio-dimensions = Ширина { $width }, высота { $height }, глубина { $depth }
+studio-real-size = Реальный размер (по большей стороне)
+studio-real-size-warning = Размер в этом файле выглядит неправдоподобно (меньше 1 см или больше 100 м). Укажите реальный размер.
+unit-centimetre-short = см
+unit-inch-short = дюйм
+unit-foot-short = фут

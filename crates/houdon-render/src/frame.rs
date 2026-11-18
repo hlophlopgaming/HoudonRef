@@ -38,7 +38,7 @@ impl Frame {
                 Some(FrameObject {
                     model_id: object.model,
                     model: Arc::clone(model),
-                    transform: object.transform.matrix(),
+                    transform: scene.object_matrix(object),
                     selected: scene.selected() == Some(object.id),
                 })
             })

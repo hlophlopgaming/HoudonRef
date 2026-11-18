@@ -46,3 +46,16 @@ unit-metre-short = m
 unit-millimetre-short = mm
 model-male-figure = male figure
 model-female-figure = female figure
+
+settings = Settings
+settings-units = Units
+units-metric = Metric (cm, m)
+units-imperial = Imperial (in, ft)
+settings-figure-height = Figure height
+studio-figure = Human figure (shown at figure height)
+studio-dimensions = Width { $width }, height { $height }, depth { $depth }
+studio-real-size = Real size (largest side)
+studio-real-size-warning = The size in this file looks wrong (smaller than 1 cm or larger than 100 m). Enter the real size.
+unit-centimetre-short = cm
+unit-inch-short = in
+unit-foot-short = ft

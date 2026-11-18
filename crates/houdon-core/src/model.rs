@@ -6,6 +6,9 @@ use glam::{Mat3, Mat4, Vec3};
 /// Default figure height in metres used when normalising human models.
 pub const DEFAULT_FIGURE_HEIGHT: f32 = 1.75;
 
+/// How many times taller than wide a model must be to be taken for a figure.
+pub const FIGURE_ASPECT: f32 = 2.5;
+
 /// Axis-aligned bounding box.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
@@ -122,6 +125,34 @@ impl Model {
         }
         model.recompute_bounds();
         Ok(model)
+    }
+
+    /// A model from triangle positions, with smooth normals.
+    pub fn from_mesh(name: impl Into<String>, positions: Vec<Vec3>, indices: Vec<u32>) -> Self {
+        let normals = smooth_normals(&positions, &indices);
+        let vertices = positions
+            .iter()
+            .zip(&normals)
+            .map(|(p, n)| Vertex {
+                position: p.to_array(),
+                normal: n.to_array(),
+            })
+            .collect();
+        let mut model = Self {
+            name: name.into(),
+            vertices,
+            indices,
+            bounds: Bounds::EMPTY,
+        };
+        model.recompute_bounds();
+        model
+    }
+
+    /// Whether the model is shaped like a standing human body: at least
+    /// [`FIGURE_ASPECT`] times taller than it is wide or deep.
+    pub fn looks_like_figure(&self) -> bool {
+        let size = self.bounds.size();
+        size.y > 0.0 && size.y >= FIGURE_ASPECT * size.x.max(size.z)
     }
 
     /// Number of triangles.

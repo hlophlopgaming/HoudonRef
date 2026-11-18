@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
 
+use crate::model::DEFAULT_FIGURE_HEIGHT;
 use crate::{Bounds, Model, OrbitCamera};
 
 /// Identifies a model. Ids are unique for the whole run of the app, so the
@@ -64,12 +65,28 @@ impl Transform {
 }
 
 /// One placement of a model in the scene.
+///
+/// An object stands on its model's bottom centre: the transform moves,
+/// turns and sizes the model around that point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Object {
     pub id: ObjectId,
     pub model: ModelId,
     pub transform: Transform,
+    /// Shown as a Figure: at the scene's figure height instead of the
+    /// model's own size.
+    pub figure: bool,
 }
+
+/// A model in the scene and how its file units map to metres.
+struct ModelEntry {
+    model: Arc<Model>,
+    /// Metres per file unit, set when the artist gives a real size.
+    unit_scale: f32,
+}
+
+/// Sizes outside this range, in metres, are taken for wrong file units.
+const PLAUSIBLE_SIZE: std::ops::RangeInclusive<f32> = 0.01..=100.0;
 
 /// The light of the scene: one key light and ambient light, in linear colour.
 ///
@@ -115,8 +132,9 @@ impl Lighting {
 const PLACEMENT_GAP: f32 = 0.1;
 
 pub struct Scene {
-    models: BTreeMap<ModelId, Arc<Model>>,
+    models: BTreeMap<ModelId, ModelEntry>,
     objects: Vec<Object>,
+    figure_height: f32,
     next_object: u64,
     selected: Option<ObjectId>,
     pub camera: OrbitCamera,
@@ -150,6 +168,7 @@ impl Scene {
             models: BTreeMap::new(),
             objects: Vec::new(),
             next_object: 1,
+            figure_height: DEFAULT_FIGURE_HEIGHT,
             selected: None,
             camera: OrbitCamera::default(),
             lighting: Lighting::default(),
@@ -161,37 +180,116 @@ impl Scene {
     /// object is placed from it.
     pub fn add_model(&mut self, model: Model) -> ModelId {
         let id = ModelId::next();
-        self.models.insert(id, Arc::new(model));
+        self.models.insert(
+            id,
+            ModelEntry {
+                model: Arc::new(model),
+                unit_scale: 1.0,
+            },
+        );
         id
     }
 
     pub fn model(&self, id: ModelId) -> Option<&Arc<Model>> {
-        self.models.get(&id)
+        self.models.get(&id).map(|entry| &entry.model)
+    }
+
+    /// Height every Figure is shown at, metres.
+    pub fn figure_height(&self) -> f32 {
+        self.figure_height
+    }
+
+    pub fn set_figure_height(&mut self, metres: f32) {
+        if metres > 0.0 {
+            self.figure_height = metres;
+        }
+    }
+
+    /// Shows an object as a Figure or at its model's own size. Returns
+    /// `false` if there is no such object.
+    pub fn set_figure(&mut self, id: ObjectId, figure: bool) -> bool {
+        match self.objects.iter_mut().find(|o| o.id == id) {
+            Some(object) => {
+                object.figure = figure;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the model's size in file units looks wrong (below a
+    /// centimetre or above 100 metres), so the artist should give its real
+    /// size. Models shown as Figures never ask.
+    pub fn needs_real_size(&self, id: ModelId) -> bool {
+        let shown_as_figure = self.objects.iter().any(|o| o.model == id && o.figure);
+        !shown_as_figure
+            && self
+                .real_size(id)
+                .is_some_and(|size| !PLAUSIBLE_SIZE.contains(&size))
+    }
+
+    /// The model's largest side in metres, as shown when not a Figure.
+    pub fn real_size(&self, id: ModelId) -> Option<f32> {
+        let entry = self.models.get(&id)?;
+        Some(entry.model.bounds.size().max_element() * entry.unit_scale)
+    }
+
+    /// Gives the model's real size as its largest side in metres; every
+    /// object of the model that is not a Figure is resized.
+    pub fn set_real_size(&mut self, id: ModelId, metres: f32) {
+        if let Some(entry) = self.models.get_mut(&id) {
+            let file_size = entry.model.bounds.size().max_element();
+            if file_size > 0.0 && metres > 0.0 {
+                entry.unit_scale = metres / file_size;
+            }
+        }
+    }
+
+    /// Model space to scene space for an object: the model is stood on its
+    /// bottom centre, sized (as a Figure or by its real size), then the
+    /// object's transform is applied.
+    pub fn object_matrix(&self, object: &Object) -> Mat4 {
+        let Some(entry) = self.models.get(&object.model) else {
+            return object.transform.matrix();
+        };
+        let b = entry.model.bounds;
+        if b.is_empty() {
+            return object.transform.matrix();
+        }
+        let size = b.size();
+        let scale = if object.figure && size.y > 0.0 {
+            self.figure_height / size.y
+        } else {
+            entry.unit_scale
+        };
+        let to_bottom_centre =
+            Mat4::from_translation(-Vec3::new(b.center().x, b.min.y, b.center().z));
+        object.transform.matrix() * Mat4::from_scale(Vec3::splat(scale)) * to_bottom_centre
     }
 
     /// Places a new object from a model already in the scene. The first
     /// object stands at the origin; later ones stand on the ground beside
     /// the others, so nothing overlaps.
     pub fn add_object(&mut self, model: ModelId) -> Option<ObjectId> {
-        let model_bounds = self.models.get(&model)?.bounds;
+        let figure = self.models.get(&model)?.model.looks_like_figure();
         let scene_bounds = self.bounds();
         let mut transform = Transform::default();
-        if !scene_bounds.is_empty() && !model_bounds.is_empty() {
-            transform.translation.y = -model_bounds.min.y;
-            transform.translation.z = scene_bounds.center().z - model_bounds.center().z;
+        if !scene_bounds.is_empty() {
+            transform.translation.z = scene_bounds.center().z;
         }
-        let id = self.push_object(model, transform);
+        let id = self.push_object(model, transform, figure);
         self.place_beside_others(id);
         Some(id)
     }
 
-    fn push_object(&mut self, model: ModelId, transform: Transform) -> ObjectId {
+    fn push_object(&mut self, model: ModelId, transform: Transform, figure: bool) -> ObjectId {
         let id = ObjectId(self.next_object);
         self.next_object += 1;
         self.objects.push(Object {
             id,
             model,
             transform,
+            figure,
         });
         id
     }
@@ -200,7 +298,7 @@ impl Scene {
     /// others and selects it.
     pub fn duplicate_object(&mut self, id: ObjectId) -> Option<ObjectId> {
         let original = self.object(id)?.clone();
-        let copy = self.push_object(original.model, original.transform);
+        let copy = self.push_object(original.model, original.transform, original.figure);
         self.place_beside_others(copy);
         self.selected = Some(copy);
         Some(copy)
@@ -289,14 +387,14 @@ impl Scene {
 
     /// Bounds of one object in scene space.
     pub fn object_bounds(&self, object: &Object) -> Bounds {
-        let Some(model) = self.models.get(&object.model) else {
+        let Some(entry) = self.models.get(&object.model) else {
             return Bounds::EMPTY;
         };
-        let b = model.bounds;
+        let b = entry.model.bounds;
         if b.is_empty() {
             return b;
         }
-        let m = object.transform.matrix();
+        let m = self.object_matrix(object);
         Bounds::from_points((0..8).map(|i| {
             let corner = Vec3::new(
                 if i & 1 == 0 { b.min.x } else { b.max.x },
@@ -340,10 +438,11 @@ impl Scene {
         }
         let mut nearest: Option<(f32, ObjectId)> = None;
         for object in &self.objects {
-            let Some(model) = self.models.get(&object.model) else {
+            let Some(entry) = self.models.get(&object.model) else {
                 continue;
             };
-            let world = object.transform.matrix();
+            let model = &entry.model;
+            let world = self.object_matrix(object);
             if ray_box_distance(origin, direction, &self.object_bounds(object)).is_none() {
                 continue;
             }
@@ -587,6 +686,128 @@ mod tests {
         }
         let up = Vec3::Y;
         assert_eq!(scene.pick(scene.camera.eye(), up), None, "nothing above");
+    }
+
+    /// An axis-aligned box model, `size` metres per side in file units.
+    fn cube(size: f32) -> Model {
+        let h = size / 2.0;
+        let corners: Vec<Vec3> = (0..8)
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 == 0 { -h } else { h },
+                    if i & 2 == 0 { -h } else { h },
+                    if i & 4 == 0 { -h } else { h },
+                )
+            })
+            .collect();
+        let quads = [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ];
+        let indices = quads
+            .iter()
+            .flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]])
+            .collect();
+        Model::from_mesh("cube", corners, indices)
+    }
+
+    fn raw_figure(bytes: &[u8]) -> Model {
+        Model::from_gltf_slice("figure", bytes).unwrap()
+    }
+
+    const FEMALE: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
+
+    #[test]
+    fn test_figures_are_shown_at_figure_height() {
+        for bytes in [MALE, FEMALE] {
+            let mut scene = Scene::new();
+            let model = scene.add_model(raw_figure(bytes));
+            let id = scene.add_object(model).unwrap();
+            assert!(scene.object(id).unwrap().figure, "detected as a figure");
+            let b = scene.object_bounds(scene.object(id).unwrap());
+            assert!(
+                (b.size().y - DEFAULT_FIGURE_HEIGHT).abs() < 1e-3,
+                "{:?}",
+                b.size()
+            );
+            assert!(b.min.y.abs() < 1e-4, "stands on the ground");
+        }
+    }
+
+    #[test]
+    fn figure_height_applies_to_every_figure() {
+        let mut scene = Scene::new();
+        let model = scene.add_model(raw_figure(MALE));
+        let id = scene.add_object(model).unwrap();
+        scene.set_figure_height(1.2);
+        let b = scene.object_bounds(scene.object(id).unwrap());
+        assert!((b.size().y - 1.2).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_squat_model_is_not_a_figure_and_keeps_its_size() {
+        let mut scene = Scene::new();
+        let model = scene.add_model(cube(0.3));
+        let id = scene.add_object(model).unwrap();
+        assert!(!scene.object(id).unwrap().figure);
+        let b = scene.object_bounds(scene.object(id).unwrap());
+        assert!((b.size().y - 0.3).abs() < 1e-4);
+        assert!(b.min.y.abs() < 1e-4, "stands on the ground");
+    }
+
+    #[test]
+    fn switching_the_figure_setting_off_restores_the_file_size() {
+        let mut scene = Scene::new();
+        let file_height = raw_figure(MALE).bounds.size().y;
+        let model = scene.add_model(raw_figure(MALE));
+        let id = scene.add_object(model).unwrap();
+        assert!(scene.set_figure(id, false));
+        let b = scene.object_bounds(scene.object(id).unwrap());
+        assert!((b.size().y - file_height).abs() < 1e-3);
+        scene.set_figure(id, true);
+        let b = scene.object_bounds(scene.object(id).unwrap());
+        assert!((b.size().y - DEFAULT_FIGURE_HEIGHT).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_model_asks_for_its_real_size_outside_a_centimetre_to_100_metres() {
+        let mut scene = Scene::new();
+        let tiny = scene.add_model(cube(0.005));
+        let fine = scene.add_model(cube(0.5));
+        let huge = scene.add_model(cube(200.0));
+        assert!(scene.needs_real_size(tiny));
+        assert!(!scene.needs_real_size(fine));
+        assert!(scene.needs_real_size(huge));
+    }
+
+    #[test]
+    fn setting_a_real_size_rescales_every_object_of_the_model() {
+        let mut scene = Scene::new();
+        let model = scene.add_model(cube(200.0));
+        let a = scene.add_object(model).unwrap();
+        let b = scene.add_object(model).unwrap();
+        scene.set_real_size(model, 0.3);
+        assert!(!scene.needs_real_size(model));
+        for id in [a, b] {
+            let size = scene.object_bounds(scene.object(id).unwrap()).size();
+            assert!((size.max_element() - 0.3).abs() < 1e-4, "{size:?}");
+        }
+        assert!((scene.real_size(model).unwrap() - 0.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn figures_do_not_ask_for_a_real_size() {
+        let mut scene = Scene::new();
+        // A 2 cm tall figure-shaped file: it becomes a figure, so no prompt.
+        let mut tiny_figure = raw_figure(MALE);
+        tiny_figure.normalize_to_height(0.02);
+        let model = scene.add_model(tiny_figure);
+        scene.add_object(model).unwrap();
+        assert!(!scene.needs_real_size(model));
     }
 
     #[test]
