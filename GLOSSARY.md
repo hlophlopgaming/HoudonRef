@@ -18,6 +18,14 @@ _Avoid_: Trainer, practice mode
 
 ## Studio
 
+**Model**:
+A 3D asset loaded from a file, with its own shape and materials.
+_Avoid_: Mesh, asset, file (in prose)
+
+**Object**:
+One placement of a model in the Studio scene, with its own position, rotation and size. Two apples on a table are one model and two objects.
+_Avoid_: Instance, item, prop
+
 **Figure**:
 A model of a human body, shown at real human height.
 _Avoid_: Character, avatar, mannequin
