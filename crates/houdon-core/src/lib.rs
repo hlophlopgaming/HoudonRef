@@ -5,6 +5,8 @@
 
 pub mod camera;
 pub mod model;
+pub mod scene;
 
 pub use camera::OrbitCamera;
 pub use model::{Bounds, LoadError, Model, Vertex};
+pub use scene::{Lighting, ModelId, Object, ObjectId, Scene, Transform};

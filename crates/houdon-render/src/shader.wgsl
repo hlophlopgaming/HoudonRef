@@ -1,7 +1,7 @@
 // Clay shader: one directional key light plus a sky/ground ambient term.
 // Kept within the WebGL2 feature level: no storage buffers, no compute.
 
-struct Uniforms {
+struct Globals {
     view_proj: mat4x4<f32>,
     // xyz: direction towards the light (world space); w: 1 if the output
     // needs gamma encoding in the shader (non-sRGB framebuffer).
@@ -16,7 +16,14 @@ struct Uniforms {
     base_color: vec4<f32>,
 };
 
-@group(0) @binding(0) var<uniform> u: Uniforms;
+struct ObjectUniforms {
+    model: mat4x4<f32>,
+    // Inverse transpose of the model matrix, for normals.
+    normal: mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: Globals;
+@group(1) @binding(0) var<uniform> object: ObjectUniforms;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -31,8 +38,8 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = u.view_proj * vec4<f32>(in.position, 1.0);
-    out.normal = in.normal;
+    out.clip_position = u.view_proj * object.model * vec4<f32>(in.position, 1.0);
+    out.normal = (object.normal * vec4<f32>(in.normal, 0.0)).xyz;
     return out;
 }
 

@@ -3,9 +3,9 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use houdon_core::{Model, OrbitCamera, model::DEFAULT_FIGURE_HEIGHT};
+use houdon_core::{Model, OrbitCamera, Scene, model::DEFAULT_FIGURE_HEIGHT};
 use houdon_i18n::Localizer;
-use houdon_render::{Lighting, SceneMesh, ViewportCallback};
+use houdon_render::{Frame, ViewportCallback};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -21,16 +21,10 @@ enum ModelSource {
 type FileResult = (String, Result<Vec<u8>, String>);
 
 pub struct Studio {
+    scene: Scene,
     source: ModelSource,
-    mesh: Option<SceneMesh>,
-    next_mesh_id: u64,
-    camera: OrbitCamera,
     /// Frame the model on the next drawn frame, once the viewport size is known.
     frame_pending: bool,
-    light_azimuth_deg: f32,
-    light_elevation_deg: f32,
-    lighting: Lighting,
-    background: egui::Color32,
     message: Option<String>,
     /// Files whose bytes arrive asynchronously (always on the web).
     incoming: Arc<Mutex<Vec<FileResult>>>,
@@ -39,15 +33,9 @@ pub struct Studio {
 impl Studio {
     pub fn new() -> Self {
         let mut studio = Self {
+            scene: Scene::new(),
             source: ModelSource::BuiltinMale,
-            mesh: None,
-            next_mesh_id: 1,
-            camera: OrbitCamera::default(),
             frame_pending: true,
-            light_azimuth_deg: -45.0,
-            light_elevation_deg: 45.0,
-            lighting: Lighting::default(),
-            background: egui::Color32::from_gray(40),
             message: None,
             incoming: Arc::default(),
         };
@@ -55,14 +43,19 @@ impl Studio {
         studio
     }
 
+    /// Replaces the scene's content with one object of `model`.
     fn set_model(&mut self, mut model: Model) {
         model.normalize_to_height(DEFAULT_FIGURE_HEIGHT);
-        self.mesh = Some(SceneMesh {
-            id: self.next_mesh_id,
-            model: Arc::new(model),
-        });
-        self.next_mesh_id += 1;
+        self.scene.clear();
+        let id = self.scene.add_model(model);
+        self.scene.add_object(id);
         self.frame_pending = true;
+    }
+
+    /// The model shown, while the Studio holds a single object.
+    fn current_model(&self) -> Option<&Arc<Model>> {
+        let object = self.scene.objects().first()?;
+        self.scene.model(object.model)
     }
 
     fn load_builtin(&mut self, source: ModelSource) {
@@ -172,17 +165,17 @@ impl Studio {
             tr.tr("studio-builtin-female"),
         );
         if self.source == ModelSource::File
-            && let Some(mesh) = &self.mesh
+            && let Some(model) = self.current_model()
         {
-            ui.radio_value(&mut source, ModelSource::File, mesh.model.name.as_str());
+            ui.radio_value(&mut source, ModelSource::File, model.name.as_str());
         }
         if source != self.source {
             self.load_builtin(source);
         }
-        if let Some(mesh) = &self.mesh {
+        if let Some(model) = self.current_model() {
             ui.weak(tr.tr_args(
                 "model-stats",
-                &[("triangles", mesh.model.triangle_count().into())],
+                &[("triangles", model.triangle_count().into())],
             ));
         }
         ui.label(tr.tr("studio-drop-hint"));
@@ -192,7 +185,7 @@ impl Studio {
 
         ui.separator();
         ui.strong(tr.tr("studio-camera"));
-        let mut focal = self.camera.focal_length_mm;
+        let mut focal = self.scene.camera.focal_length_mm;
         let slider = egui::Slider::new(
             &mut focal,
             OrbitCamera::MIN_FOCAL_LENGTH_MM..=OrbitCamera::MAX_FOCAL_LENGTH_MM,
@@ -201,7 +194,7 @@ impl Studio {
         .suffix(" mm")
         .text(tr.tr("studio-focal-length"));
         if ui.add(slider).changed() {
-            self.camera.set_focal_length_keep_framing(focal);
+            self.scene.camera.set_focal_length_keep_framing(focal);
         }
         if ui.button(tr.tr("studio-frame")).clicked() {
             self.frame_pending = true;
@@ -210,32 +203,33 @@ impl Studio {
 
         ui.separator();
         ui.strong(tr.tr("studio-light"));
+        let lighting = &mut self.scene.lighting;
+        let mut azimuth = lighting.key_azimuth.to_degrees();
+        let mut elevation = lighting.key_elevation.to_degrees();
         ui.add(
-            egui::Slider::new(&mut self.light_azimuth_deg, -180.0..=180.0)
+            egui::Slider::new(&mut azimuth, -180.0..=180.0)
                 .suffix("°")
                 .text(tr.tr("studio-light-azimuth")),
         );
         ui.add(
-            egui::Slider::new(&mut self.light_elevation_deg, -60.0..=90.0)
+            egui::Slider::new(&mut elevation, -60.0..=90.0)
                 .suffix("°")
                 .text(tr.tr("studio-light-elevation")),
         );
+        lighting.key_azimuth = azimuth.to_radians();
+        lighting.key_elevation = elevation.to_radians();
         ui.add(
-            egui::Slider::new(&mut self.lighting.key_intensity, 0.0..=3.0)
+            egui::Slider::new(&mut lighting.key_intensity, 0.0..=3.0)
                 .text(tr.tr("studio-light-intensity")),
         );
         ui.add(
-            egui::Slider::new(&mut self.lighting.ambient_intensity, 0.0..=1.0)
+            egui::Slider::new(&mut lighting.ambient_intensity, 0.0..=1.0)
                 .text(tr.tr("studio-ambient")),
         );
         ui.horizontal(|ui| {
-            ui.color_edit_button_srgba(&mut self.background);
+            ui.color_edit_button_srgb(&mut self.scene.background);
             ui.label(tr.tr("studio-background"));
         });
-        self.lighting.key_direction = Lighting::direction_from_angles(
-            self.light_azimuth_deg.to_radians(),
-            self.light_elevation_deg.to_radians(),
-        );
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui, _tr: &Localizer) {
@@ -243,10 +237,8 @@ impl Studio {
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let aspect = rect.width() / rect.height().max(1.0);
 
-        if self.frame_pending
-            && let Some(mesh) = &self.mesh
-        {
-            self.camera.frame(&mesh.model.bounds, aspect);
+        if self.frame_pending && self.scene.object_count() > 0 {
+            self.scene.frame_camera(aspect);
             self.frame_pending = false;
         }
 
@@ -257,20 +249,20 @@ impl Studio {
             || (response.dragged_by(egui::PointerButton::Primary)
                 && ui.input(|i| i.modifiers.shift));
         if pan {
-            self.camera.pan(drag.x / height, drag.y / height);
+            self.scene.camera.pan(drag.x / height, drag.y / height);
         } else if response.dragged_by(egui::PointerButton::Primary) {
             // A drag across the full viewport height turns the model half way round.
             let speed = std::f32::consts::PI / height;
-            self.camera.orbit(-drag.x * speed, drag.y * speed);
+            self.scene.camera.orbit(-drag.x * speed, drag.y * speed);
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             let pinch = ui.input(|i| i.zoom_delta());
             if scroll != 0.0 {
-                self.camera.dolly((-scroll * 0.002).exp());
+                self.scene.camera.dolly((-scroll * 0.002).exp());
             }
             if pinch != 1.0 {
-                self.camera.dolly(1.0 / pinch);
+                self.scene.camera.dolly(1.0 / pinch);
             }
         }
         if response.double_clicked() {
@@ -278,13 +270,12 @@ impl Studio {
         }
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, self.background);
+        let [r, g, b] = self.scene.background;
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
         painter.add(eframe::egui_wgpu::Callback::new_paint_callback(
             rect,
             ViewportCallback {
-                mesh: self.mesh.clone(),
-                view_proj: self.camera.view_projection(aspect),
-                lighting: self.lighting,
+                frame: Frame::from_scene(&self.scene, aspect),
             },
         ));
     }
