@@ -40,3 +40,9 @@ error-blend-file = Файлы .blend пока нельзя открыть нап
 error-unsupported-file = Неподдерживаемый тип файла: { $name }. Откройте файл .glb или .gltf.
 error-load-failed = Не удалось открыть { $name }: { $reason }
 error-read-failed = Не удалось прочитать { $name }.
+
+studio-object-label = { $model } { $number }
+unit-metre-short = м
+unit-millimetre-short = мм
+model-male-figure = мужская фигура
+model-female-figure = женская фигура

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use glam::{EulerRot, Quat};
 use houdon_core::{LoadError, Model, ModelId, OrbitCamera, Scene, model::DEFAULT_FIGURE_HEIGHT};
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -19,10 +18,25 @@ enum Builtin {
 }
 
 impl Builtin {
+    const ALL: [Self; 2] = [Self::Male, Self::Female];
+
     fn name_and_bytes(self) -> (&'static str, &'static [u8]) {
         match self {
             Self::Male => ("male", MALE_GLB),
             Self::Female => ("female", FEMALE_GLB),
+        }
+    }
+
+    /// Where the model came from, for [`Studio::sources`].
+    fn source(self) -> String {
+        format!("builtin:{}", self.name_and_bytes().0)
+    }
+
+    /// Translated name shown in the objects list.
+    fn message_id(self) -> &'static str {
+        match self {
+            Self::Male => "model-male-figure",
+            Self::Female => "model-female-figure",
         }
     }
 }
@@ -94,9 +108,9 @@ impl Studio {
 
     fn add_builtin(&mut self, builtin: Builtin) {
         let (name, bytes) = builtin.name_and_bytes();
-        if let Err(error) = self.add_object_from(format!("builtin:{name}"), || {
-            Model::from_gltf_slice(name, bytes)
-        }) {
+        if let Err(error) =
+            self.add_object_from(builtin.source(), || Model::from_gltf_slice(name, bytes))
+        {
             log::error!("built-in model {name} failed to load: {error}");
         }
     }
@@ -185,7 +199,7 @@ impl Studio {
             OrbitCamera::MIN_FOCAL_LENGTH_MM..=OrbitCamera::MAX_FOCAL_LENGTH_MM,
         )
         .logarithmic(true)
-        .suffix(" mm")
+        .suffix(format!(" {}", tr.tr("unit-millimetre-short")))
         .text(tr.tr("studio-focal-length"));
         if ui.add(slider).changed() {
             self.scene.camera.set_focal_length_keep_framing(focal);
@@ -238,6 +252,22 @@ impl Studio {
         });
     }
 
+    /// Name of a model for the interface: translated for built-in models,
+    /// the file name for loaded ones.
+    fn model_display_name(&self, id: ModelId, tr: &Localizer) -> String {
+        let builtin = Builtin::ALL
+            .into_iter()
+            .find(|b| self.sources.get(&b.source()) == Some(&id));
+        match builtin {
+            Some(builtin) => tr.tr(builtin.message_id()),
+            None => self
+                .scene
+                .model(id)
+                .map(|m| m.name.clone())
+                .unwrap_or_default(),
+        }
+    }
+
     fn objects_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.strong(tr.tr("studio-objects"));
         ui.horizontal_wrapped(|ui| {
@@ -253,7 +283,7 @@ impl Studio {
             ui.colored_label(ui.visuals().warn_fg_color, message);
         }
 
-        // Number objects of the same model: "male 1", "male 2", …
+        // Number objects of the same model: "male figure 1", "male figure 2", …
         let mut seen: HashMap<ModelId, usize> = HashMap::new();
         let mut clicked = None;
         egui::ScrollArea::vertical()
@@ -263,15 +293,15 @@ impl Studio {
                 for object in self.scene.objects() {
                     let n = seen.entry(object.model).or_default();
                     *n += 1;
-                    let name = self
-                        .scene
-                        .model(object.model)
-                        .map_or("?", |m| m.name.as_str());
+                    let label = tr.tr_args(
+                        "studio-object-label",
+                        &[
+                            ("model", self.model_display_name(object.model, tr).into()),
+                            ("number", (*n).into()),
+                        ],
+                    );
                     let selected = self.scene.selected() == Some(object.id);
-                    if ui
-                        .selectable_label(selected, format!("{name} {n}"))
-                        .clicked()
-                    {
+                    if ui.selectable_label(selected, label).clicked() {
                         clicked = Some(object.id);
                     }
                 }
@@ -282,22 +312,16 @@ impl Studio {
 
         ui.horizontal_wrapped(|ui| {
             let selected = self.scene.selected();
-            if ui
-                .add_enabled(
-                    selected.is_some(),
-                    egui::Button::new(tr.tr("studio-object-duplicate")),
-                )
-                .clicked()
+            let button = |ui: &mut egui::Ui, id: &str| {
+                ui.add_enabled(selected.is_some(), egui::Button::new(tr.tr(id)))
+                    .clicked()
+            };
+            if button(ui, "studio-object-duplicate")
                 && let Some(id) = selected
             {
                 self.scene.duplicate_object(id);
             }
-            if ui
-                .add_enabled(
-                    selected.is_some(),
-                    egui::Button::new(tr.tr("studio-object-delete")),
-                )
-                .clicked()
+            if button(ui, "studio-object-delete")
                 && let Some(id) = selected
             {
                 self.scene.remove_object(id);
@@ -322,10 +346,11 @@ impl Studio {
         }
         let mut transform = object.transform;
         // Show tiny rounding leftovers as 0 instead of "-0.00".
-        transform.translation = transform.translation.map(tidy);
+        transform.translation = transform.translation.map(snap_to_zero);
         let mut changed = false;
 
         ui.label(tr.tr("studio-position"));
+        let metres = format!(" {}", tr.tr("unit-metre-short"));
         ui.horizontal(|ui| {
             for (axis, value) in [
                 ("X", &mut transform.translation.x),
@@ -337,7 +362,7 @@ impl Studio {
                     .add(
                         egui::DragValue::new(value)
                             .speed(0.01)
-                            .suffix(" m")
+                            .suffix(metres.as_str())
                             .max_decimals(3),
                     )
                     .changed();
@@ -345,8 +370,8 @@ impl Studio {
         });
 
         ui.label(tr.tr("studio-rotation"));
-        let (yaw, pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
-        let mut angles = [yaw, pitch, roll].map(|a| tidy(a.to_degrees()));
+        let r = transform.rotation;
+        let mut angles = [r.y, r.x, r.z].map(|a| snap_to_zero(a.to_degrees()));
         let mut turned = false;
         for (angle, axis) in angles.iter_mut().zip(["Y", "X", "Z"]) {
             turned |= ui
@@ -359,7 +384,7 @@ impl Studio {
         }
         if turned {
             let [y, x, z] = angles.map(f32::to_radians);
-            transform.rotation = Quat::from_euler(EulerRot::YXZ, y, x, z);
+            transform.rotation = glam::Vec3::new(x, y, z);
             changed = true;
         }
 
@@ -423,11 +448,8 @@ impl Studio {
             self.scene.select(hit);
         }
         if response.double_clicked() {
-            self.pending_frame = Some(if self.scene.selected().is_some() {
-                FrameTarget::Selected
-            } else {
-                FrameTarget::Scene
-            });
+            // Frames the whole scene when nothing is selected.
+            self.pending_frame = Some(FrameTarget::Selected);
         }
         if response.hovered()
             && ui.input(|i| i.key_pressed(egui::Key::Delete))
@@ -450,7 +472,7 @@ impl Studio {
 
 /// Snaps values that are zero up to rounding to exactly 0, so they do not
 /// display as "-0".
-fn tidy(value: f32) -> f32 {
+fn snap_to_zero(value: f32) -> f32 {
     if value.abs() < 1e-4 { 0.0 } else { value }
 }
 

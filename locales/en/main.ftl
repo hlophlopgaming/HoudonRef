@@ -40,3 +40,9 @@ error-blend-file = .blend files cannot be opened directly yet. In Blender, use F
 error-unsupported-file = Unsupported file type: { $name }. Open a .glb or .gltf file.
 error-load-failed = Could not open { $name }: { $reason }
 error-read-failed = Could not read { $name }.
+
+studio-object-label = { $model } { $number }
+unit-metre-short = m
+unit-millimetre-short = mm
+model-male-figure = male figure
+model-female-figure = female figure

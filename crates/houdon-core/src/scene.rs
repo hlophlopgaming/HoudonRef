@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{EulerRot, Mat4, Quat, Vec3};
 
 use crate::{Bounds, Model, OrbitCamera};
 
@@ -31,7 +31,10 @@ pub struct ObjectId(u64);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform {
     pub translation: Vec3,
-    pub rotation: Quat,
+    /// Rotation as angles in radians around Y, then X, then Z, the order
+    /// an artist turns an object on a stand. Kept as angles, not a
+    /// quaternion, so the values the artist set read back unchanged.
+    pub rotation: Vec3,
     pub scale: f32,
 }
 
@@ -39,7 +42,7 @@ impl Default for Transform {
     fn default() -> Self {
         Self {
             translation: Vec3::ZERO,
-            rotation: Quat::IDENTITY,
+            rotation: Vec3::ZERO,
             scale: 1.0,
         }
     }
@@ -49,7 +52,12 @@ impl Transform {
     pub fn matrix(&self) -> Mat4 {
         Mat4::from_scale_rotation_translation(
             Vec3::splat(self.scale),
-            self.rotation,
+            Quat::from_euler(
+                EulerRot::YXZ,
+                self.rotation.y,
+                self.rotation.x,
+                self.rotation.z,
+            ),
             self.translation,
         )
     }
@@ -169,13 +177,12 @@ impl Scene {
         let scene_bounds = self.bounds();
         let mut transform = Transform::default();
         if !scene_bounds.is_empty() && !model_bounds.is_empty() {
-            transform.translation = Vec3::new(
-                scene_bounds.max.x + PLACEMENT_GAP - model_bounds.min.x,
-                -model_bounds.min.y,
-                scene_bounds.center().z - model_bounds.center().z,
-            );
+            transform.translation.y = -model_bounds.min.y;
+            transform.translation.z = scene_bounds.center().z - model_bounds.center().z;
         }
-        Some(self.push_object(model, transform))
+        let id = self.push_object(model, transform);
+        self.place_beside_others(id);
+        Some(id)
     }
 
     fn push_object(&mut self, model: ModelId, transform: Transform) -> ObjectId {
@@ -189,7 +196,7 @@ impl Scene {
         id
     }
 
-    /// Places a copy of an object, with the same turn and size, beside the
+    /// Places a copy of an object, with the same rotation and size, beside the
     /// others and selects it.
     pub fn duplicate_object(&mut self, id: ObjectId) -> Option<ObjectId> {
         let original = self.object(id)?.clone();
@@ -362,7 +369,7 @@ impl Scene {
 mod tests {
     use super::*;
     use crate::model::DEFAULT_FIGURE_HEIGHT;
-    use glam::{Quat, Vec3};
+    use glam::Vec3;
 
     const MALE: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 
@@ -513,13 +520,41 @@ mod tests {
         let doubled = scene.object_bounds(scene.object(first).unwrap()).size();
         assert!((doubled.y - before.y * 2.0).abs() < 1e-3);
         transform.scale = 1.0;
-        transform.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        transform.rotation = Vec3::new(0.0, 0.0, std::f32::consts::FRAC_PI_2);
         scene.set_transform(first, transform);
         let lying = scene.object_bounds(scene.object(first).unwrap()).size();
         assert!(
             (lying.x - before.y).abs() < 1e-3,
             "a figure turned on its side is as wide as it was tall"
         );
+    }
+
+    #[test]
+    fn rotation_angles_read_back_as_set() {
+        let (mut scene, _, first, _) = two_figure_scene();
+        let mut transform = scene.object(first).unwrap().transform;
+        // Past 90 degrees around X, where Euler angles from a quaternion would flip.
+        transform.rotation =
+            Vec3::new(120f32.to_radians(), 30f32.to_radians(), -45f32.to_radians());
+        scene.set_transform(first, transform);
+        assert_eq!(
+            scene.object(first).unwrap().transform.rotation,
+            transform.rotation
+        );
+    }
+
+    #[test]
+    fn picking_prefers_the_nearer_of_two_overlapping_objects() {
+        let (mut scene, _, first, second) = two_figure_scene();
+        // Put the second figure straight behind the first, as seen from the front.
+        let mut behind = scene.object(first).unwrap().transform;
+        behind.translation.z -= 1.0;
+        scene.set_transform(second, behind);
+        let centre = scene.object_bounds(scene.object(first).unwrap()).center();
+        let eye = centre + Vec3::new(0.0, 0.0, 5.0);
+        assert_eq!(scene.pick(eye, -Vec3::Z), Some(first));
+        let eye_behind = centre - Vec3::new(0.0, 0.0, 6.0);
+        assert_eq!(scene.pick(eye_behind, Vec3::Z), Some(second));
     }
 
     #[test]
