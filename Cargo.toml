@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/hlophlopgaming/HoudonRef"
+rust-version = "1.88"
+
+[workspace.dependencies]
+houdon-core = { path = "crates/houdon-core" }
+houdon-render = { path = "crates/houdon-render" }
+houdon-i18n = { path = "crates/houdon-i18n" }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+egui = "0.37"
+glam = { version = "0.34", features = ["bytemuck"] }
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
+bytemuck = { version = "1", features = ["derive"] }
+fluent-bundle = "0.16"
+unic-langid = { version = "0.9", features = ["macros"] }
+log = "0.4"
+thiserror = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 2
+
+# The web build ships over the network: favour size.
+[profile.web-release]
+inherits = "release"
+opt-level = "s"
+panic = "abort"

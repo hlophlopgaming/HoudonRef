@@ -1,0 +1,24 @@
+[package]
+name = "houdon-app"
+description = "HoudonRef: anatomy atlas, 3D reference studio and timed drawing atelier for artists"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "houdon-app"
+
+[dependencies]
+houdon-core.workspace = true
+houdon-i18n.workspace = true
+houdon-render.workspace = true
+eframe.workspace = true
+egui.workspace = true
+glam.workspace = true
+log.workspace = true
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement", "Navigator"] }
