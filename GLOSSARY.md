@@ -49,3 +49,45 @@ _Avoid_: Environment, scene, background
 **Camera preset**:
 A named camera position and lens, relative to the model.
 _Avoid_: Viewpoint, bookmark, saved view
+
+## Viewing
+
+**Shading mode**:
+How the Studio draws its objects: Solid, Lit or Render.
+_Avoid_: View mode, render mode (for the first two)
+
+**Solid**:
+A shading mode that ignores the scene's lights and shows form with a built-in light, a matcap or flat colour.
+_Avoid_: Workbench, preview
+
+**Lit**:
+A shading mode that shows objects under the scene's lights and room, with shadows. The main mode for drawing.
+_Avoid_: Material preview, realtime
+
+**Render**:
+A shading mode that refines a still view over a few seconds into a picture with bounce light and soft shadows.
+_Avoid_: Path tracing (in the interface), final render
+
+**Clay**:
+A single plain colour that stands in for every material, so only form and light are seen.
+_Avoid_: Grey material, neutral material
+
+**Matcap**:
+A picture of a lit sphere used to shade objects in the Solid mode, independent of the scene's lights.
+_Avoid_: Material capture, lit sphere
+
+**Overlay**:
+A drawing aid laid over Solid or Lit: cavity, contour lines or wireframe.
+_Avoid_: Effect, filter
+
+**Cavity**:
+An overlay that brightens ridges and darkens hollows to make small changes of form readable.
+_Avoid_: Curvature shading, edge highlight
+
+**Contour lines**:
+An overlay that draws an object's silhouette and the inner folds of its form as lines.
+_Avoid_: Outline (means silhouette only), edges, line art
+
+**Reflex**:
+Light bounced back into the shadow side of a form from the floor or nearby objects.
+_Avoid_: Bounce light, indirect light (in the interface)
