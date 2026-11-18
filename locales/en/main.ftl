@@ -9,16 +9,25 @@ language = Language
 atlas-coming = The anatomy atlas is coming: an écorché by layers, from skin to skeleton, with names in English, Russian and Latin.
 atelier-coming = The drawing atelier is coming: timed sessions that go from a Loomis ball to planes to a detailed head, with changing angles and light.
 
-studio-model = Model
-studio-builtin-male = Male figure (test)
-studio-builtin-female = Female figure (test)
-studio-drop-hint = Drop a .glb or .gltf file onto the window to open it.
 model-stats = { $triangles } triangles
-studio-frame = Frame model
+
+studio-objects = Objects
+studio-add-male = Add male figure (test)
+studio-add-female = Add female figure (test)
+studio-object-duplicate = Duplicate
+studio-object-delete = Delete
+studio-frame-scene = Frame scene
+studio-frame-selected = Frame selected
+studio-selected-object = Selected object
+studio-no-selection = Click an object in the view or in the list to select it.
+studio-position = Position
+studio-rotation = Rotation
+studio-size = Size
+studio-camera-hint = Drag to orbit, right-drag or Shift-drag to pan, scroll to move closer. Click to select, double-click to frame, Delete to remove.
+studio-drop-hint = Drop a .glb or .gltf file onto the window to add it.
 
 studio-camera = Camera
 studio-focal-length = Focal length
-studio-camera-hint = Drag to orbit, right-drag or Shift-drag to pan, scroll to move closer.
 
 studio-light = Light
 studio-light-azimuth = Direction

@@ -12,6 +12,10 @@ use crate::Frame;
 /// Neutral light-grey clay, linear.
 pub const CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
 
+/// Colour mixed into a selected object, linear, and how much of it. A cool
+/// interface blue, so the highlight is not mistaken for a material.
+const SELECTION_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.35];
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct Globals {
@@ -28,6 +32,8 @@ struct Globals {
 struct ObjectUniforms {
     model: [[f32; 4]; 4],
     normal: [[f32; 4]; 4],
+    /// rgb: highlight colour; a: how much of it to mix in.
+    highlight: [f32; 4],
 }
 
 struct GpuMesh {
@@ -203,6 +209,11 @@ impl SceneRenderer {
             let uniforms = ObjectUniforms {
                 model: object.transform.to_cols_array_2d(),
                 normal: object.transform.inverse().transpose().to_cols_array_2d(),
+                highlight: if object.selected {
+                    SELECTION_COLOR
+                } else {
+                    [0.0; 4]
+                },
             };
             let start = i * self.object_stride as usize;
             bytes[start..start + size_of::<ObjectUniforms>()]

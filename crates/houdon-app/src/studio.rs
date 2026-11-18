@@ -1,9 +1,11 @@
-//! Studio section: view a model under adjustable light.
+//! Studio section: arrange objects and light them.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use houdon_core::{Model, OrbitCamera, Scene, model::DEFAULT_FIGURE_HEIGHT};
+use glam::{EulerRot, Quat};
+use houdon_core::{LoadError, Model, ModelId, OrbitCamera, Scene, model::DEFAULT_FIGURE_HEIGHT};
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
 
@@ -11,10 +13,26 @@ const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelSource {
-    BuiltinMale,
-    BuiltinFemale,
-    File,
+enum Builtin {
+    Male,
+    Female,
+}
+
+impl Builtin {
+    fn name_and_bytes(self) -> (&'static str, &'static [u8]) {
+        match self {
+            Self::Male => ("male", MALE_GLB),
+            Self::Female => ("female", FEMALE_GLB),
+        }
+    }
+}
+
+/// What to point the camera at on the next drawn frame, once the viewport
+/// size is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameTarget {
+    Scene,
+    Selected,
 }
 
 /// A file read from disk or the browser, waiting to be parsed.
@@ -22,9 +40,10 @@ type FileResult = (String, Result<Vec<u8>, String>);
 
 pub struct Studio {
     scene: Scene,
-    source: ModelSource,
-    /// Frame the model on the next drawn frame, once the viewport size is known.
-    frame_pending: bool,
+    /// Models already in the scene by where they came from, so adding the
+    /// same model again places another object of it instead of loading it twice.
+    sources: HashMap<String, ModelId>,
+    pending_frame: Option<FrameTarget>,
     message: Option<String>,
     /// Files whose bytes arrive asynchronously (always on the web).
     incoming: Arc<Mutex<Vec<FileResult>>>,
@@ -34,62 +53,64 @@ impl Studio {
     pub fn new() -> Self {
         let mut studio = Self {
             scene: Scene::new(),
-            source: ModelSource::BuiltinMale,
-            frame_pending: true,
+            sources: HashMap::new(),
+            pending_frame: Some(FrameTarget::Scene),
             message: None,
             incoming: Arc::default(),
         };
-        studio.load_builtin(ModelSource::BuiltinMale);
+        studio.add_builtin(Builtin::Male);
+        studio.scene.select(None);
         studio
     }
 
-    /// Replaces the scene's content with one object of `model`.
-    fn set_model(&mut self, mut model: Model) {
-        model.normalize_to_height(DEFAULT_FIGURE_HEIGHT);
-        self.scene.clear();
-        let id = self.scene.add_model(model);
-        self.scene.add_object(id);
-        self.frame_pending = true;
-    }
-
-    /// The model shown, while the Studio holds a single object.
-    fn current_model(&self) -> Option<&Arc<Model>> {
-        let object = self.scene.objects().first()?;
-        self.scene.model(object.model)
-    }
-
-    fn load_builtin(&mut self, source: ModelSource) {
-        let (name, bytes) = match source {
-            ModelSource::BuiltinMale => ("male", MALE_GLB),
-            ModelSource::BuiltinFemale => ("female", FEMALE_GLB),
-            ModelSource::File => return,
-        };
-        match Model::from_gltf_slice(name, bytes) {
-            Ok(model) => {
-                self.source = source;
-                self.message = None;
-                self.set_model(model);
+    /// Places a new object of the model from `source`, loading the model
+    /// only if the scene does not have it yet, and selects the object.
+    fn add_object_from(
+        &mut self,
+        source: String,
+        load: impl FnOnce() -> Result<Model, LoadError>,
+    ) -> Result<(), LoadError> {
+        let known = self
+            .sources
+            .get(&source)
+            .copied()
+            .filter(|id| self.scene.model(*id).is_some());
+        let model_id = match known {
+            Some(id) => id,
+            None => {
+                let mut model = load()?;
+                model.normalize_to_height(DEFAULT_FIGURE_HEIGHT);
+                let id = self.scene.add_model(model);
+                self.sources.insert(source, id);
+                id
             }
-            Err(error) => log::error!("built-in model {name} failed to load: {error}"),
+        };
+        let object = self.scene.add_object(model_id);
+        self.scene.select(object);
+        self.pending_frame = Some(FrameTarget::Scene);
+        self.message = None;
+        Ok(())
+    }
+
+    fn add_builtin(&mut self, builtin: Builtin) {
+        let (name, bytes) = builtin.name_and_bytes();
+        if let Err(error) = self.add_object_from(format!("builtin:{name}"), || {
+            Model::from_gltf_slice(name, bytes)
+        }) {
+            log::error!("built-in model {name} failed to load: {error}");
         }
     }
 
     fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
-        match Model::from_gltf_slice(name, bytes) {
-            Ok(model) => {
-                self.source = ModelSource::File;
-                self.message = None;
-                self.set_model(model);
-            }
-            Err(error) => {
-                self.message = Some(tr.tr_args(
-                    "error-load-failed",
-                    &[
-                        ("name", name.to_owned().into()),
-                        ("reason", error.to_string().into()),
-                    ],
-                ));
-            }
+        let source = format!("file:{name}:{}", bytes.len());
+        if let Err(error) = self.add_object_from(source, || Model::from_gltf_slice(name, bytes)) {
+            self.message = Some(tr.tr_args(
+                "error-load-failed",
+                &[
+                    ("name", name.to_owned().into()),
+                    ("reason", error.to_string().into()),
+                ],
+            ));
         }
     }
 
@@ -152,36 +173,9 @@ impl Studio {
 
     fn side_panel(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.add_space(6.0);
-        ui.strong(tr.tr("studio-model"));
-        let mut source = self.source;
-        ui.radio_value(
-            &mut source,
-            ModelSource::BuiltinMale,
-            tr.tr("studio-builtin-male"),
-        );
-        ui.radio_value(
-            &mut source,
-            ModelSource::BuiltinFemale,
-            tr.tr("studio-builtin-female"),
-        );
-        if self.source == ModelSource::File
-            && let Some(model) = self.current_model()
-        {
-            ui.radio_value(&mut source, ModelSource::File, model.name.as_str());
-        }
-        if source != self.source {
-            self.load_builtin(source);
-        }
-        if let Some(model) = self.current_model() {
-            ui.weak(tr.tr_args(
-                "model-stats",
-                &[("triangles", model.triangle_count().into())],
-            ));
-        }
-        ui.label(tr.tr("studio-drop-hint"));
-        if let Some(message) = &self.message {
-            ui.colored_label(ui.visuals().warn_fg_color, message);
-        }
+        self.objects_section(ui, tr);
+        ui.separator();
+        self.selected_object_section(ui, tr);
 
         ui.separator();
         ui.strong(tr.tr("studio-camera"));
@@ -196,9 +190,21 @@ impl Studio {
         if ui.add(slider).changed() {
             self.scene.camera.set_focal_length_keep_framing(focal);
         }
-        if ui.button(tr.tr("studio-frame")).clicked() {
-            self.frame_pending = true;
-        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr.tr("studio-frame-scene")).clicked() {
+                self.pending_frame = Some(FrameTarget::Scene);
+            }
+            let has_selection = self.scene.selected().is_some();
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new(tr.tr("studio-frame-selected")),
+                )
+                .clicked()
+            {
+                self.pending_frame = Some(FrameTarget::Selected);
+            }
+        });
         ui.weak(tr.tr("studio-camera-hint"));
 
         ui.separator();
@@ -232,14 +238,155 @@ impl Studio {
         });
     }
 
+    fn objects_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-objects"));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr.tr("studio-add-male")).clicked() {
+                self.add_builtin(Builtin::Male);
+            }
+            if ui.button(tr.tr("studio-add-female")).clicked() {
+                self.add_builtin(Builtin::Female);
+            }
+        });
+        ui.label(tr.tr("studio-drop-hint"));
+        if let Some(message) = &self.message {
+            ui.colored_label(ui.visuals().warn_fg_color, message);
+        }
+
+        // Number objects of the same model: "male 1", "male 2", …
+        let mut seen: HashMap<ModelId, usize> = HashMap::new();
+        let mut clicked = None;
+        egui::ScrollArea::vertical()
+            .id_salt("objects_list")
+            .max_height(160.0)
+            .show(ui, |ui| {
+                for object in self.scene.objects() {
+                    let n = seen.entry(object.model).or_default();
+                    *n += 1;
+                    let name = self
+                        .scene
+                        .model(object.model)
+                        .map_or("?", |m| m.name.as_str());
+                    let selected = self.scene.selected() == Some(object.id);
+                    if ui
+                        .selectable_label(selected, format!("{name} {n}"))
+                        .clicked()
+                    {
+                        clicked = Some(object.id);
+                    }
+                }
+            });
+        if let Some(id) = clicked {
+            self.scene.select(Some(id));
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            let selected = self.scene.selected();
+            if ui
+                .add_enabled(
+                    selected.is_some(),
+                    egui::Button::new(tr.tr("studio-object-duplicate")),
+                )
+                .clicked()
+                && let Some(id) = selected
+            {
+                self.scene.duplicate_object(id);
+            }
+            if ui
+                .add_enabled(
+                    selected.is_some(),
+                    egui::Button::new(tr.tr("studio-object-delete")),
+                )
+                .clicked()
+                && let Some(id) = selected
+            {
+                self.scene.remove_object(id);
+            }
+        });
+    }
+
+    fn selected_object_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-selected-object"));
+        let Some(id) = self.scene.selected() else {
+            ui.weak(tr.tr("studio-no-selection"));
+            return;
+        };
+        let Some(object) = self.scene.object(id) else {
+            return;
+        };
+        if let Some(model) = self.scene.model(object.model) {
+            ui.weak(tr.tr_args(
+                "model-stats",
+                &[("triangles", model.triangle_count().into())],
+            ));
+        }
+        let mut transform = object.transform;
+        // Show tiny rounding leftovers as 0 instead of "-0.00".
+        transform.translation = transform.translation.map(tidy);
+        let mut changed = false;
+
+        ui.label(tr.tr("studio-position"));
+        ui.horizontal(|ui| {
+            for (axis, value) in [
+                ("X", &mut transform.translation.x),
+                ("Y", &mut transform.translation.y),
+                ("Z", &mut transform.translation.z),
+            ] {
+                ui.label(axis);
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(value)
+                            .speed(0.01)
+                            .suffix(" m")
+                            .max_decimals(3),
+                    )
+                    .changed();
+            }
+        });
+
+        ui.label(tr.tr("studio-rotation"));
+        let (yaw, pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        let mut angles = [yaw, pitch, roll].map(|a| tidy(a.to_degrees()));
+        let mut turned = false;
+        for (angle, axis) in angles.iter_mut().zip(["Y", "X", "Z"]) {
+            turned |= ui
+                .add(
+                    egui::Slider::new(angle, -180.0..=180.0)
+                        .suffix("°")
+                        .text(axis),
+                )
+                .changed();
+        }
+        if turned {
+            let [y, x, z] = angles.map(f32::to_radians);
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, y, x, z);
+            changed = true;
+        }
+
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut transform.scale, 0.01..=100.0)
+                    .logarithmic(true)
+                    .text(tr.tr("studio-size")),
+            )
+            .changed();
+
+        if changed {
+            self.scene.set_transform(id, transform);
+        }
+    }
+
     fn viewport(&mut self, ui: &mut egui::Ui, _tr: &Localizer) {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let aspect = rect.width() / rect.height().max(1.0);
 
-        if self.frame_pending && self.scene.object_count() > 0 {
-            self.scene.frame_camera(aspect);
-            self.frame_pending = false;
+        if self.scene.object_count() > 0 {
+            match self.pending_frame.take() {
+                Some(FrameTarget::Scene) => self.scene.frame_camera(aspect),
+                Some(FrameTarget::Selected) => self.scene.frame_selected(aspect),
+                None => {}
+            }
         }
 
         let drag = response.drag_delta();
@@ -265,8 +412,28 @@ impl Studio {
                 self.scene.camera.dolly(1.0 / pinch);
             }
         }
+        if response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            // Pointer to normalised device coordinates, y up.
+            let ndc_x = (pointer.x - rect.left()) / rect.width() * 2.0 - 1.0;
+            let ndc_y = 1.0 - (pointer.y - rect.top()) / rect.height() * 2.0;
+            let (origin, direction) = self.scene.camera.ray(ndc_x, ndc_y, aspect);
+            let hit = self.scene.pick(origin, direction);
+            self.scene.select(hit);
+        }
         if response.double_clicked() {
-            self.frame_pending = true;
+            self.pending_frame = Some(if self.scene.selected().is_some() {
+                FrameTarget::Selected
+            } else {
+                FrameTarget::Scene
+            });
+        }
+        if response.hovered()
+            && ui.input(|i| i.key_pressed(egui::Key::Delete))
+            && let Some(id) = self.scene.selected()
+        {
+            self.scene.remove_object(id);
         }
 
         let painter = ui.painter_at(rect);
@@ -279,6 +446,12 @@ impl Studio {
             },
         ));
     }
+}
+
+/// Snaps values that are zero up to rounding to exactly 0, so they do not
+/// display as "-0".
+fn tidy(value: f32) -> f32 {
+    if value.abs() < 1e-4 { 0.0 } else { value }
 }
 
 fn file_name(path: &Path) -> String {

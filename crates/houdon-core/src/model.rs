@@ -129,6 +129,22 @@ impl Model {
         self.indices.len() / 3
     }
 
+    /// Parameter `t` of the nearest triangle hit by the ray
+    /// `origin + t * direction` (model space), or `None`.
+    pub fn ray_hit(&self, origin: Vec3, direction: Vec3) -> Option<f32> {
+        let mut nearest: Option<f32> = None;
+        for tri in self.indices.chunks_exact(3) {
+            let [a, b, c] =
+                [tri[0], tri[1], tri[2]].map(|i| Vec3::from(self.vertices[i as usize].position));
+            if let Some(t) = ray_triangle(origin, direction, a, b, c)
+                && nearest.is_none_or(|n| t < n)
+            {
+                nearest = Some(t);
+            }
+        }
+        nearest
+    }
+
     /// Scales the model uniformly so it is `height` units tall, stands on
     /// the ground plane (`y = 0`) and is centred on the vertical axis.
     ///
@@ -216,6 +232,30 @@ impl Model {
             }
         }
     }
+}
+
+/// Möller–Trumbore ray/triangle intersection, both sides.
+fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let p = direction.cross(edge2);
+    let det = edge1.dot(p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let s = origin - a;
+    let u = s.dot(p) * inv_det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let v = direction.dot(q) * inv_det;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = edge2.dot(q) * inv_det;
+    (t > 0.0).then_some(t)
 }
 
 /// Area-weighted vertex normals for meshes that come without normals.

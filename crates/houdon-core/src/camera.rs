@@ -67,6 +67,16 @@ impl OrbitCamera {
         self.projection(aspect) * self.view()
     }
 
+    /// A ray from the eye through a point of the picture, given in
+    /// normalised device coordinates (`-1..1`, `y` up). Returns origin and
+    /// unit direction.
+    pub fn ray(&self, ndc_x: f32, ndc_y: f32, aspect: f32) -> (Vec3, Vec3) {
+        let inverse = self.view_projection(aspect).inverse();
+        let near = inverse.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
+        let far = inverse.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
+        (self.eye(), (far - near).normalize())
+    }
+
     /// Rotates around the target by the given angles in radians.
     pub fn orbit(&mut self, delta_yaw: f32, delta_pitch: f32) {
         self.yaw = (self.yaw + delta_yaw).rem_euclid(std::f32::consts::TAU);
@@ -128,6 +138,21 @@ mod tests {
         let cam = OrbitCamera::default();
         let eye = cam.eye();
         assert!(eye.z > 0.0 && eye.x.abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_centre_ray_points_at_the_target() {
+        let mut cam = OrbitCamera::default();
+        cam.orbit(0.7, 0.3);
+        let (origin, direction) = cam.ray(0.0, 0.0, 1.5);
+        assert!((origin - cam.eye()).length() < 1e-5);
+        let to_target = (cam.target - cam.eye()).normalize();
+        assert!(direction.dot(to_target) > 0.9999);
+        let (_, up_ray) = cam.ray(0.0, 1.0, 1.5);
+        assert!(
+            up_ray.y > direction.y,
+            "the top of the picture looks higher"
+        );
     }
 
     #[test]

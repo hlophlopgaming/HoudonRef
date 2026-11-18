@@ -9,16 +9,25 @@ language = Язык
 atlas-coming = Анатомический атлас в работе: экорше по слоям, от кожи до скелета, с названиями на английском, русском и латыни.
 atelier-coming = Ателье для рисования в работе: сессии на время, от шара Лумиса через плоскости к детальной голове, со сменой ракурса и света.
 
-studio-model = Модель
-studio-builtin-male = Мужская фигура (тест)
-studio-builtin-female = Женская фигура (тест)
-studio-drop-hint = Перетащите файл .glb или .gltf в окно, чтобы открыть его.
 model-stats = Треугольников: { $triangles }
-studio-frame = Показать модель целиком
+
+studio-objects = Объекты
+studio-add-male = Добавить мужскую фигуру (тест)
+studio-add-female = Добавить женскую фигуру (тест)
+studio-object-duplicate = Дублировать
+studio-object-delete = Удалить
+studio-frame-scene = Показать всю сцену
+studio-frame-selected = Показать выделенное
+studio-selected-object = Выделенный объект
+studio-no-selection = Щёлкните объект в окне или в списке, чтобы выделить его.
+studio-position = Положение
+studio-rotation = Поворот
+studio-size = Размер
+studio-camera-hint = Тяните мышью, чтобы вращать; правой кнопкой или с Shift, чтобы сдвигать; колесом, чтобы приближать. Щелчок выделяет, двойной щелчок показывает целиком, Delete удаляет.
+studio-drop-hint = Перетащите файл .glb или .gltf в окно, чтобы добавить его.
 
 studio-camera = Камера
 studio-focal-length = Фокусное расстояние
-studio-camera-hint = Тяните мышью, чтобы вращать; правой кнопкой или с Shift, чтобы сдвигать; колесом, чтобы приближать.
 
 studio-light = Свет
 studio-light-azimuth = Направление

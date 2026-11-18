@@ -12,6 +12,8 @@ pub struct FrameObject {
     pub model_id: ModelId,
     pub model: Arc<Model>,
     pub transform: Mat4,
+    /// Drawn with the selection highlight.
+    pub selected: bool,
 }
 
 /// Everything the renderer needs for one picture. Cheap to build every
@@ -37,6 +39,7 @@ impl Frame {
                     model_id: object.model,
                     model: Arc::clone(model),
                     transform: object.transform.matrix(),
+                    selected: scene.selected() == Some(object.id),
                 })
             })
             .collect();
