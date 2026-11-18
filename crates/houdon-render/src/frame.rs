@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use glam::Mat4;
-use houdon_core::{Lighting, Model, Scene};
+use houdon_core::{Lighting, Model, ModelId, Scene};
 
 /// One object to draw.
 #[derive(Clone)]
 pub struct FrameObject {
-    /// Cache key for the model's GPU data; see [`houdon_core::ModelId`].
-    pub model_key: u64,
+    /// Which model this is; GPU data is cached per model.
+    pub model_id: ModelId,
     pub model: Arc<Model>,
     pub transform: Mat4,
 }
@@ -34,7 +34,7 @@ impl Frame {
             .filter_map(|object| {
                 let model = scene.model(object.model)?;
                 Some(FrameObject {
-                    model_key: object.model.as_u64(),
+                    model_id: object.model,
                     model: Arc::clone(model),
                     transform: object.transform.matrix(),
                 })

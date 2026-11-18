@@ -21,11 +21,6 @@ impl ModelId {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
-
-    /// A number that identifies the model for caches.
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
 }
 
 /// Identifies an object in a scene.
@@ -167,6 +162,21 @@ impl Scene {
         &self.objects
     }
 
+    pub fn object(&self, id: ObjectId) -> Option<&Object> {
+        self.objects.iter().find(|o| o.id == id)
+    }
+
+    /// Moves, turns or resizes an object. Returns `false` if there is no such object.
+    pub fn set_transform(&mut self, id: ObjectId, transform: Transform) -> bool {
+        match self.objects.iter_mut().find(|o| o.id == id) {
+            Some(object) => {
+                object.transform = transform;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn object_count(&self) -> usize {
         self.objects.len()
     }
@@ -262,6 +272,30 @@ mod tests {
             .x = 2.0;
         let after = scene.bounds().center();
         assert!((after.x - before.x - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn key_light_direction_follows_its_angles() {
+        let mut lighting = Lighting {
+            key_azimuth: 0.0,
+            key_elevation: 0.0,
+            ..Lighting::default()
+        };
+        assert!(
+            (lighting.key_direction() - Vec3::Z).length() < 1e-6,
+            "front"
+        );
+        lighting.key_elevation = std::f32::consts::FRAC_PI_2;
+        assert!(
+            (lighting.key_direction() - Vec3::Y).length() < 1e-6,
+            "above"
+        );
+        lighting.key_elevation = 0.0;
+        lighting.key_azimuth = std::f32::consts::FRAC_PI_2;
+        assert!(
+            (lighting.key_direction() - Vec3::X).length() < 1e-6,
+            "right"
+        );
     }
 
     #[test]

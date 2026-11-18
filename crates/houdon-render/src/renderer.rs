@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
-use houdon_core::Vertex;
+use houdon_core::{ModelId, Vertex};
 
 use crate::Frame;
 
@@ -49,9 +49,9 @@ pub struct SceneRenderer {
     object_stride: u64,
     object_capacity: u64,
     gamma_encode: bool,
-    meshes: HashMap<u64, GpuMesh>,
-    /// Model key of each object drawn by the last prepared frame.
-    draw_list: Vec<u64>,
+    meshes: HashMap<ModelId, GpuMesh>,
+    /// Model of each object drawn by the last prepared frame.
+    draw_list: Vec<ModelId>,
 }
 
 impl SceneRenderer {
@@ -180,10 +180,10 @@ impl SceneRenderer {
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) {
         // Meshes: upload new models, drop models no longer drawn.
         self.meshes
-            .retain(|key, _| frame.objects.iter().any(|o| o.model_key == *key));
+            .retain(|id, _| frame.objects.iter().any(|o| o.model_id == *id));
         for object in &frame.objects {
             self.meshes
-                .entry(object.model_key)
+                .entry(object.model_id)
                 .or_insert_with(|| upload_mesh(device, &object.model));
         }
 
@@ -211,7 +211,7 @@ impl SceneRenderer {
         if !bytes.is_empty() {
             queue.write_buffer(&self.object_buffer, 0, &bytes);
         }
-        self.draw_list = frame.objects.iter().map(|o| o.model_key).collect();
+        self.draw_list = frame.objects.iter().map(|o| o.model_id).collect();
 
         let l = &frame.lighting;
         let globals = Globals {
@@ -232,8 +232,8 @@ impl SceneRenderer {
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
-        for (i, key) in self.draw_list.iter().enumerate() {
-            let Some(mesh) = self.meshes.get(key) else {
+        for (i, id) in self.draw_list.iter().enumerate() {
+            let Some(mesh) = self.meshes.get(id) else {
                 continue;
             };
             let offset = (i as u64 * self.object_stride) as u32;

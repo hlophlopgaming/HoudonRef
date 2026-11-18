@@ -7,9 +7,15 @@ const MALE: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const SIZE: u32 = 64;
 
 /// A renderer, or `None` with a note when this machine has no GPU adapter.
+///
+/// CI sets `HOUDON_REQUIRE_GPU=1`, so there a missing adapter fails the test
+/// instead of silently skipping it.
 fn renderer() -> Option<OffscreenRenderer> {
     match OffscreenRenderer::new_headless() {
         Ok(renderer) => Some(renderer),
+        Err(error) if std::env::var_os("HOUDON_REQUIRE_GPU").is_some() => {
+            panic!("HOUDON_REQUIRE_GPU is set but no renderer is available: {error}")
+        }
         Err(error) => {
             eprintln!("skipping render test: {error}");
             None

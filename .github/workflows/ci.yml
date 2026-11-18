@@ -34,6 +34,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy -p houdon-app --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test --workspace
+        env:
+          # Render tests must not skip silently in CI.
+          HOUDON_REQUIRE_GPU: "1"
 
   desktop:
     name: Desktop build (${{ matrix.os }})
