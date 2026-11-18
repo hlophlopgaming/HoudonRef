@@ -43,12 +43,16 @@ A named arrangement of lights, without room or camera.
 _Avoid_: Lighting setup, light scheme
 
 **Room**:
-What surrounds the model: the floor, the backdrop and the ambient light they give.
-_Avoid_: Environment, scene, background
+What surrounds the objects: the floor, the backdrop and the ambient light they give.
+_Avoid_: Environment, background
 
 **Camera preset**:
-A named camera position and lens, relative to the model.
+A named camera position and lens, relative either to the whole scene or to the selected object.
 _Avoid_: Viewpoint, bookmark, saved view
+
+**Scene**:
+Everything set up in the Studio, saved together: the objects, the lights, the room, the camera and the shading mode.
+_Avoid_: Project, document, setup
 
 ## Viewing
 

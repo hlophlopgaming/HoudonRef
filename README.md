@@ -53,3 +53,4 @@ cargo test --workspace
 - Logo after *A kneeling écorché figure* by J. Gamelin (1778/79). Source image: [Wellcome Collection](https://wellcomecollection.org/works/gv249kuf), CC BY 4.0.
 - Planned anatomy data: [Écorché](https://github.com/Charleeh/ecorche) and [Z-Anatomy](https://www.z-anatomy.com/), both CC BY-SA 4.0. Anatomy content will ship as separate content packs under its own licence.
 - Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
+- Planned Studio content: matcaps from [Blender](https://github.com/blender/blender/tree/main/release/datafiles/studiolights/matcap) (CC0) and [Light Masks](https://kenney.nl/assets/light-masks) by Kenney (CC0).
