@@ -240,3 +240,30 @@ fn a_spot_light_leaves_surfaces_outside_its_cone_unlit() {
         image.pixel(top.0, top.1)
     );
 }
+
+#[test]
+fn sixteen_lights_light_the_figure() {
+    use houdon_core::{LightKind, MAX_LIGHTS};
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut scene = figure_scene();
+    scene.ambient.intensity = 0.0;
+    let kinds = [LightKind::Directional, LightKind::Point, LightKind::Spot];
+    for i in 0.. {
+        if scene.add_light(kinds[i % 3]).is_none() {
+            break;
+        }
+    }
+    assert_eq!(scene.lights().len(), MAX_LIGHTS);
+    let all = render(&mut renderer, &scene);
+    // Turn the last light off: the picture must change, so it was drawn.
+    let mut last = scene.lights()[MAX_LIGHTS - 1].clone();
+    last.enabled = false;
+    scene.set_light(last);
+    assert_ne!(
+        render(&mut renderer, &scene),
+        all,
+        "the 16th light is drawn"
+    );
+}

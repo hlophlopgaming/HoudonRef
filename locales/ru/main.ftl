@@ -60,7 +60,7 @@ unit-inch-short = дюйм
 unit-foot-short = фут
 length = { $value } { $unit }
 
-studio-lights = Источники света
+studio-lights = Свет
 studio-add-light = + { $kind }
 studio-lights-full = В сцене может быть не больше { $count } источников.
 studio-light-label = { $number }. { $kind }

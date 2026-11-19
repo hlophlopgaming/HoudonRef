@@ -12,7 +12,7 @@ pub enum LightKind {
     Directional,
     /// A bulb: light from one point in every direction, fading with distance.
     Point,
-    /// A stage lamp: a point light limited to a cone aimed at the scene centre.
+    /// A point light limited to a cone aimed at the scene centre, like on a stage.
     Spot,
 }
 
@@ -76,6 +76,18 @@ impl Light {
         }
     }
 
+    /// Changes the kind, keeping the brightness at the scene centre when
+    /// the falloff appears or disappears.
+    pub fn set_kind(&mut self, kind: LightKind) {
+        let squared = (self.distance * self.distance).max(1e-4);
+        match (self.kind.is_positional(), kind.is_positional()) {
+            (false, true) => self.intensity *= squared,
+            (true, false) => self.intensity /= squared,
+            _ => {}
+        }
+        self.kind = kind;
+    }
+
     /// How brightly the light lights a surface at the scene centre facing it.
     pub fn intensity_at_centre(&self) -> f32 {
         if self.kind.is_positional() {
@@ -131,6 +143,21 @@ mod tests {
             (light.direction() - Vec3::X).length() < 1e-6,
             "to the right"
         );
+    }
+
+    #[test]
+    fn changing_the_kind_keeps_the_brightness_at_the_centre() {
+        let mut light = Light::new(LightKind::Directional);
+        light.distance = 10.0;
+        let before = light.intensity_at_centre();
+        for kind in [LightKind::Point, LightKind::Spot, LightKind::Directional] {
+            light.set_kind(kind);
+            assert_eq!(light.kind, kind);
+            assert!(
+                (light.intensity_at_centre() - before).abs() < 1e-4,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

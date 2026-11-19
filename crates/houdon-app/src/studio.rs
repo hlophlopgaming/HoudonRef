@@ -326,13 +326,9 @@ impl Studio {
             remove = ui.button(tr.tr("studio-light-remove")).clicked();
         });
         if light.kind != before.kind {
-            // Keep the brightness at the scene centre when the falloff changes.
-            let squared = light.distance * light.distance;
-            match (before.kind.is_positional(), light.kind.is_positional()) {
-                (false, true) => light.intensity *= squared,
-                (true, false) => light.intensity /= squared,
-                _ => {}
-            }
+            let kind = light.kind;
+            light.kind = before.kind;
+            light.set_kind(kind);
         }
         let max_intensity = if light.kind.is_positional() {
             200.0
@@ -341,6 +337,7 @@ impl Studio {
         };
         ui.add(
             egui::Slider::new(&mut light.intensity, 0.0..=max_intensity)
+                .clamping(egui::SliderClamping::Edits)
                 .logarithmic(light.kind.is_positional())
                 .text(tr.tr("studio-light-intensity")),
         );
@@ -578,7 +575,8 @@ impl Studio {
             ))
         };
         let centre = self.scene.light_centre();
-        let reach = self.scene.bounds().radius().max(0.5) * 0.8;
+        // On the scene's bounding sphere: near the edge of a framed view, clear of the model.
+        let reach = self.scene.bounds().radius().max(0.5);
         for light in self.scene.lights() {
             let position = if light.kind.is_positional() {
                 light.position(centre)

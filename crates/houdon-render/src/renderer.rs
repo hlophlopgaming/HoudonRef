@@ -31,6 +31,9 @@ struct Globals {
     lights: [GpuLight; MAX_LIGHTS],
 }
 
+/// `spot.w` of a light without a cone; the shader tests `spot.w > -1.5`.
+const NO_CONE: f32 = -2.0;
+
 /// One light as the shader sees it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -53,7 +56,7 @@ impl GpuLight {
             LightKind::Directional => Self {
                 position: light.direction().extend(0.0).to_array(),
                 color,
-                spot: [0.0, 0.0, 0.0, -2.0],
+                spot: [0.0, 0.0, 0.0, NO_CONE],
                 spot_inner: [0.0; 4],
             },
             LightKind::Point | LightKind::Spot => {
@@ -63,7 +66,7 @@ impl GpuLight {
                     let aim = (centre - position).normalize_or(Vec3::NEG_Y);
                     (aim.extend(outer).to_array(), [inner, 0.0, 0.0, 0.0])
                 } else {
-                    ([0.0, 0.0, 0.0, -2.0], [0.0; 4])
+                    ([0.0, 0.0, 0.0, NO_CONE], [0.0; 4])
                 };
                 Self {
                     position: position.extend(1.0).to_array(),
@@ -407,6 +410,12 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shader_light_array_matches_max_lights() {
+        let declaration = format!("const MAX_LIGHTS: u32 = {MAX_LIGHTS}u;");
+        assert!(include_str!("shader.wgsl").contains(&declaration));
+    }
 
     #[test]
     fn uniforms_are_16_byte_aligned() {
