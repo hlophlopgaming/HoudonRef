@@ -40,6 +40,8 @@ pub struct FrameObject {
     pub colors: ObjectColors,
     /// Drawn with the selection highlight.
     pub selected: bool,
+    /// Drawn only from the side its normals face, like the room's inside.
+    pub one_sided: bool,
 }
 
 /// Everything the renderer needs for one picture. Cheap to build every
@@ -78,6 +80,7 @@ impl Frame {
                             to_y: cove,
                         },
                         selected: false,
+                        one_sided: true,
                     }
                 });
         let objects = scene.objects().iter().filter_map(|object| {
@@ -88,6 +91,7 @@ impl Frame {
                 transform: scene.object_matrix(object),
                 colors: ObjectColors::uniform(CLAY_COLOR),
                 selected: scene.selected() == Some(object.id),
+                one_sided: false,
             })
         });
         Self {

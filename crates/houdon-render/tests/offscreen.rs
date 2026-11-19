@@ -366,3 +366,25 @@ fn a_red_floor_warms_the_underside_of_a_form() {
     let red = warmth(Vec3::new(0.6, 0.05, 0.05), &mut renderer);
     assert!(red > grey + 20, "red floor {red}, grey floor {grey}");
 }
+
+#[test]
+fn from_behind_the_backdrop_the_objects_stay_visible() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut scene = figure_scene();
+    // Look at the figure from far behind the backdrop.
+    scene.camera.yaw = std::f32::consts::PI;
+    scene.camera.pitch = 0.0;
+    scene.camera.distance = 60.0;
+    scene.camera.focal_length_mm = 300.0;
+    let hidden = render(&mut renderer, &scene);
+    scene.room.visible = true;
+    let shown = render(&mut renderer, &scene);
+    let centre = (SIZE / 2, SIZE / 2);
+    assert_eq!(
+        shown.pixel(centre.0, centre.1),
+        hidden.pixel(centre.0, centre.1),
+        "the backdrop seen from behind does not hide the figure"
+    );
+}

@@ -100,6 +100,7 @@ struct GpuMesh {
 /// egui-wgpu's callback resources); offscreen pictures own another.
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
+    one_sided_pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     object_layout: wgpu::BindGroupLayout,
@@ -110,8 +111,9 @@ pub struct SceneRenderer {
     object_capacity: u64,
     gamma_encode: bool,
     meshes: HashMap<ModelId, GpuMesh>,
-    /// Model of each object drawn by the last prepared frame.
-    draw_list: Vec<ModelId>,
+    /// Model of each object drawn by the last prepared frame, and whether
+    /// it is drawn one-sided.
+    draw_list: Vec<(ModelId, bool)>,
 }
 
 impl SceneRenderer {
@@ -158,47 +160,27 @@ impl SceneRenderer {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("houdon_scene_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                // Imported meshes are often open or single-sided; draw both
-                // sides and flip the normal in the shader.
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Imported meshes are often open or single-sided: draw both sides
+        // and flip the normal in the shader. The room is drawn from inside
+        // only, so it can be seen through from outside.
+        let pipeline = scene_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            depth_format,
+            None,
+            "houdon_scene_pipeline",
+        );
+        let one_sided_pipeline = scene_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            depth_format,
+            Some(wgpu::Face::Back),
+            "houdon_one_sided_pipeline",
+        );
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_globals"),
@@ -223,6 +205,7 @@ impl SceneRenderer {
 
         Self {
             pipeline,
+            one_sided_pipeline,
             globals_buffer,
             globals_bind_group,
             object_layout,
@@ -278,7 +261,11 @@ impl SceneRenderer {
         if !bytes.is_empty() {
             queue.write_buffer(&self.object_buffer, 0, &bytes);
         }
-        self.draw_list = frame.objects.iter().map(|o| o.model_id).collect();
+        self.draw_list = frame
+            .objects
+            .iter()
+            .map(|o| (o.model_id, o.one_sided))
+            .collect();
 
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
         let count = frame.lights.len().min(MAX_LIGHTS);
@@ -301,12 +288,16 @@ impl SceneRenderer {
 
     /// Draws the last prepared frame into `render_pass`.
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
-        for (i, id) in self.draw_list.iter().enumerate() {
+        for (i, (id, one_sided)) in self.draw_list.iter().enumerate() {
             let Some(mesh) = self.meshes.get(id) else {
                 continue;
             };
+            render_pass.set_pipeline(if *one_sided {
+                &self.one_sided_pipeline
+            } else {
+                &self.pipeline
+            });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -314,6 +305,56 @@ impl SceneRenderer {
             render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
         }
     }
+}
+
+fn scene_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+    cull_mode: Option<wgpu::Face>,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode,
+            ..Default::default()
+        },
+        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn uniform_layout(
