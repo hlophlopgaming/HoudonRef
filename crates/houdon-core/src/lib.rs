@@ -8,13 +8,15 @@ pub mod light;
 pub mod model;
 pub mod room;
 pub mod scene;
+pub mod shading;
 pub mod units;
 
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind};
-pub use model::{Bounds, LoadError, Model, Vertex};
+pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
     MAX_LIGHTS, MIN_EYE_HEIGHT, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform,
 };
+pub use shading::{ColorSource, DEFAULT_CLAY_COLOR, Shading, Surface};
 pub use units::{Length, LengthUnit, UnitSystem};

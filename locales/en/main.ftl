@@ -82,3 +82,9 @@ studio-camera-direction = Direction
 studio-camera-height = Height
 studio-camera-distance = Distance
 studio-light-casts-shadows = Casts shadows
+
+studio-color-source = Colour
+color-material = Material
+color-clay = Clay
+color-random = Random
+studio-clay-tone = Clay tone

@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use houdon_core::{
-    BuiltinRoom, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model, ModelId,
-    OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
+    BuiltinRoom, ColorSource, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model,
+    ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -272,7 +272,30 @@ impl Studio {
         ui.separator();
         self.lights_section(ui, tr);
         ui.separator();
+        self.color_section(ui, tr);
+        ui.separator();
         self.room_section(ui, tr);
+    }
+
+    fn color_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-color-source"));
+        let shading = &mut self.scene.shading;
+        ui.horizontal_wrapped(|ui| {
+            for source in ColorSource::ALL {
+                ui.selectable_value(
+                    &mut shading.color,
+                    source,
+                    tr.tr(color_source_message_id(source)),
+                );
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut rgb = shading.clay_color.to_array();
+            if ui.color_edit_button_rgb(&mut rgb).changed() {
+                shading.clay_color = glam::Vec3::from(rgb);
+            }
+            ui.label(tr.tr("studio-clay-tone"));
+        });
     }
 
     fn room_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -767,6 +790,15 @@ impl Studio {
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);
+    }
+}
+
+/// Message id of a colour source's name.
+fn color_source_message_id(source: ColorSource) -> &'static str {
+    match source {
+        ColorSource::Material => "color-material",
+        ColorSource::Clay => "color-clay",
+        ColorSource::Random => "color-random",
     }
 }
 

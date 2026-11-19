@@ -10,6 +10,8 @@ struct ObjectUniforms {
     highlight: vec4<f32>,
     color_below: vec4<f32>,
     color_above: vec4<f32>,
+    base_color: vec4<f32>,
+    material: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view: ShadowView;

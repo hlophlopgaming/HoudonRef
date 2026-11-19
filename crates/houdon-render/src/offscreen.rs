@@ -70,6 +70,7 @@ impl OffscreenRenderer {
     pub fn from_device(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         let renderer = SceneRenderer::new(
             &device,
+            &queue,
             COLOR_FORMAT,
             Some(DEPTH_FORMAT),
             crate::DEFAULT_ATLAS_SIZE,

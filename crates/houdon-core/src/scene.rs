@@ -12,6 +12,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use crate::light::{Light, LightId, LightKind};
 use crate::model::DEFAULT_FIGURE_HEIGHT;
 use crate::room::{Room, RoomShape};
+use crate::shading::{ColorSource, Shading, Surface, random_color};
 use crate::{Bounds, Model, OrbitCamera};
 
 /// Identifies a model. Ids are unique for the whole run of the app, so the
@@ -28,7 +29,7 @@ impl ModelId {
 
 /// Identifies an object in a scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ObjectId(u64);
+pub struct ObjectId(pub(crate) u64);
 
 /// Where an object is: position, rotation and uniform size.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,6 +114,7 @@ pub struct Scene {
     next_light: u64,
     pub camera: OrbitCamera,
     pub room: Room,
+    pub shading: Shading,
     /// The room's mesh for the current objects, rebuilt only when its
     /// shape changes.
     room_cache: std::sync::Mutex<Option<(RoomShape, ModelId, Arc<Model>)>>,
@@ -158,6 +160,7 @@ impl Scene {
             next_light: 2,
             camera: OrbitCamera::default(),
             room: Room::default(),
+            shading: Shading::default(),
             room_cache: std::sync::Mutex::new(None),
         }
     }
@@ -228,6 +231,19 @@ impl Scene {
             if file_size > 0.0 && metres > 0.0 {
                 entry.unit_scale = metres / file_size;
             }
+        }
+    }
+
+    /// What covers an object under the current colour source.
+    pub fn surface(&self, object: &Object) -> Surface {
+        let clay = Surface::Plain(self.shading.clay_color);
+        match self.shading.color {
+            ColorSource::Clay => clay,
+            ColorSource::Random => Surface::Plain(random_color(object.id)),
+            ColorSource::Material => match self.model(object.model) {
+                Some(model) if model.has_materials() => Surface::Materials,
+                _ => clay,
+            },
         }
     }
 
@@ -1010,6 +1026,41 @@ mod tests {
         assert!(room.bounds.min.z <= objects.min.z);
         let (again, _, _) = scene.room_model().unwrap();
         assert_eq!(id, again, "the same room is not rebuilt");
+    }
+
+    const TWO_MATERIALS: &[u8] = include_bytes!("../../../assets/models/test/two_materials.glb");
+
+    #[test]
+    fn a_new_scene_shows_materials() {
+        assert_eq!(Scene::new().shading.color, crate::ColorSource::Material);
+    }
+
+    #[test]
+    fn the_colour_source_decides_each_object_surface() {
+        use crate::{ColorSource, Surface};
+        let mut scene = Scene::new();
+        let painted = scene.add_model(Model::from_gltf_slice("two", TWO_MATERIALS).unwrap());
+        let plain = scene.add_model(raw_figure(MALE));
+        let painted = scene.add_object(painted).unwrap();
+        let painted = scene.object(painted).unwrap().clone();
+        let plain = scene.add_object(plain).unwrap();
+        let plain = scene.object(plain).unwrap().clone();
+        let clay = Surface::Plain(scene.shading.clay_color);
+
+        assert_eq!(scene.surface(&painted), Surface::Materials);
+        assert_eq!(
+            scene.surface(&plain),
+            clay,
+            "a model without materials is shown as Clay"
+        );
+
+        scene.shading.color = ColorSource::Clay;
+        assert_eq!(scene.surface(&painted), clay);
+
+        scene.shading.color = ColorSource::Random;
+        let (a, b) = (scene.surface(&painted), scene.surface(&plain));
+        assert_ne!(a, b, "objects get different random colours");
+        assert_eq!(scene.surface(&painted), a, "and keep them");
     }
 
     #[test]

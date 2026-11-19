@@ -82,3 +82,9 @@ studio-camera-direction = Направление
 studio-camera-height = Высота
 studio-camera-distance = Расстояние
 studio-light-casts-shadows = Отбрасывает тени
+
+studio-color-source = Цвет
+color-material = Материалы
+color-clay = Глина
+color-random = Случайный
+studio-clay-tone = Тон глины

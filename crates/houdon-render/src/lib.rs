@@ -6,13 +6,14 @@
 //! (ADR 0001).
 
 mod frame;
+mod material;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
 mod renderer;
 mod shadow;
 
-pub use frame::{Frame, FrameObject, ObjectColors};
+pub use frame::{Frame, FrameObject, FrameSurface, ObjectColors};
 #[cfg(not(target_arch = "wasm32"))]
 pub use offscreen::{Image, OffscreenError, OffscreenRenderer};
-pub use renderer::{CLAY_COLOR, SceneRenderer, ViewportCallback};
+pub use renderer::{SceneRenderer, ViewportCallback};
 pub use shadow::{DEFAULT_ATLAS_SIZE, MAX_SHADOW_VIEWS};
