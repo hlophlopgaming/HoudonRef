@@ -13,6 +13,7 @@ mod offscreen;
 mod renderer;
 mod shadow;
 
+pub use composite::AntiAliasing;
 pub use frame::{Frame, FrameObject, FrameSurface, ObjectColors};
 #[cfg(not(target_arch = "wasm32"))]
 pub use offscreen::{Image, OffscreenError, OffscreenRenderer};

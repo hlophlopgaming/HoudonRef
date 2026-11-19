@@ -7,7 +7,7 @@ use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
 use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
 
-use crate::composite::{Composite, SCENE_DEPTH_FORMAT};
+use crate::composite::{AntiAliasing, Composite, SCENE_DEPTH_FORMAT};
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
 use crate::{Frame, FrameSurface, ObjectColors};
@@ -123,8 +123,11 @@ pub(crate) struct GpuMesh {
 /// GPU resources for drawing frames. One renders the viewport (stored in
 /// egui-wgpu's callback resources); offscreen pictures own another.
 pub struct SceneRenderer {
-    pipeline: wgpu::RenderPipeline,
-    one_sided_pipeline: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    target_format: wgpu::TextureFormat,
+    /// Rebuilt when the multisampling changes.
+    pipelines: ScenePipelines,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     object_layout: wgpu::BindGroupLayout,
@@ -199,27 +202,7 @@ impl SceneRenderer {
             immediate_size: 0,
         });
 
-        // Imported meshes are often open or single-sided: draw both sides
-        // and flip the normal in the shader. The room is drawn from inside
-        // only, so it can be seen through from outside.
-        let pipeline = scene_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            target_format,
-            Some(SCENE_DEPTH_FORMAT),
-            None,
-            "houdon_scene_pipeline",
-        );
-        let one_sided_pipeline = scene_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            target_format,
-            Some(SCENE_DEPTH_FORMAT),
-            Some(wgpu::Face::Back),
-            "houdon_one_sided_pipeline",
-        );
+        let pipelines = ScenePipelines::new(device, &pipeline_layout, &shader, target_format, 1);
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_globals"),
@@ -243,8 +226,10 @@ impl SceneRenderer {
             object_resources(device, &object_layout, object_stride, object_capacity);
 
         Self {
-            pipeline,
-            one_sided_pipeline,
+            shader,
+            pipeline_layout,
+            target_format,
+            pipelines,
             globals_buffer,
             globals_bind_group,
             object_layout,
@@ -276,6 +261,7 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
         size: [u32; 2],
+        anti_aliasing: AntiAliasing,
     ) {
         // Meshes and material textures: upload new models, drop models no
         // longer drawn.
@@ -400,7 +386,18 @@ impl SceneRenderer {
                 }
             });
 
-        self.composite.prepare(device, queue, size, &frame.value);
+        let anti_aliasing = anti_aliasing.normalized();
+        if self.pipelines.samples != anti_aliasing.samples {
+            self.pipelines = ScenePipelines::new(
+                device,
+                &self.pipeline_layout,
+                &self.shader,
+                self.target_format,
+                anti_aliasing.samples,
+            );
+        }
+        self.composite
+            .prepare(device, queue, size, anti_aliasing, &frame.value);
         let Some(target) = &self.composite.target else {
             return;
         };
@@ -410,15 +407,21 @@ impl SceneRenderer {
         } else {
             frame.room.backdrop_color.to_array().map(f64::from)
         };
+        let (view, resolve_target) = target.color_attachment();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("houdon_scene_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.color_view,
+                view,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
-                    store: wgpu::StoreOp::Store,
+                    // Only the resolved picture is read afterwards.
+                    store: if resolve_target.is_some() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -448,9 +451,9 @@ impl SceneRenderer {
                 continue;
             };
             render_pass.set_pipeline(if entry.one_sided {
-                &self.one_sided_pipeline
+                &self.pipelines.one_sided
             } else {
-                &self.pipeline
+                &self.pipelines.two_sided
             });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
@@ -467,13 +470,51 @@ fn part_range(part: &MeshPart) -> std::ops::Range<u32> {
     part.first_index..part.first_index + part.index_count
 }
 
+/// The scene's pipelines for one multisampling.
+struct ScenePipelines {
+    samples: u32,
+    /// Imported meshes are often open or single-sided: drawn from both
+    /// sides, the shader flips the normal.
+    two_sided: wgpu::RenderPipeline,
+    /// The room is drawn from inside only, so it can be seen through from
+    /// outside.
+    one_sided: wgpu::RenderPipeline,
+}
+
+impl ScenePipelines {
+    fn new(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        target_format: wgpu::TextureFormat,
+        samples: u32,
+    ) -> Self {
+        let pipeline = |cull_mode, label| {
+            scene_pipeline(
+                device,
+                pipeline_layout,
+                shader,
+                target_format,
+                cull_mode,
+                samples,
+                label,
+            )
+        };
+        Self {
+            samples,
+            two_sided: pipeline(None, "houdon_scene_pipeline"),
+            one_sided: pipeline(Some(wgpu::Face::Back), "houdon_one_sided_pipeline"),
+        }
+    }
+}
+
 fn scene_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
-    depth_format: Option<wgpu::TextureFormat>,
     cull_mode: Option<wgpu::Face>,
+    samples: u32,
     label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -494,14 +535,17 @@ fn scene_pipeline(
             cull_mode,
             ..Default::default()
         },
-        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-            format,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SCENE_DEPTH_FORMAT,
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_main"),
@@ -585,6 +629,7 @@ pub struct ViewportCallback {
     pub frame: Frame,
     /// The viewport's size in physical pixels.
     pub size: [u32; 2],
+    pub anti_aliasing: AntiAliasing,
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {
@@ -597,7 +642,14 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         match callback_resources.get_mut::<SceneRenderer>() {
-            Some(renderer) => renderer.prepare(device, queue, egui_encoder, &self.frame, self.size),
+            Some(renderer) => renderer.prepare(
+                device,
+                queue,
+                egui_encoder,
+                &self.frame,
+                self.size,
+                self.anti_aliasing,
+            ),
             None => log::error!("SceneRenderer::install was not called"),
         }
         Vec::new()
