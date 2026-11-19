@@ -107,3 +107,7 @@ _Avoid_: Blur (in the interface)
 **Shadow softness**:
 How big a Light looks, from a bare bulb or the sun (crisp shadows) to a large softbox (soft shadows). The soft edge of a shadow, the penumbra, widens the farther the shadow falls from what casts it.
 _Avoid_: Blur, shadow radius
+
+**Light mask**:
+An image a spot or directional Light shines through, like window bars, foliage or water caustics. A spot Light stretches it over its cone; a directional Light repeats it, one copy per pattern size.
+_Avoid_: Gobo, cookie (in the interface)

@@ -15,7 +15,8 @@ struct Light {
     // xyz: direction the spot points; w: cosine of the outer half angle,
     // or -2 for lights without a cone.
     spot: vec4<f32>,
-    // x: cosine of the inner half angle; y: first shadow view, or -1.
+    // x: cosine of the inner half angle; y: first shadow view, or -1;
+    // z: mask layer, or -1; w: a directional light's mask pattern size.
     spot_inner: vec4<f32>,
 };
 
@@ -44,6 +45,15 @@ struct Globals {
     // x: number of lights; y: 1 if the output needs gamma encoding in the
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
+    // x: 0 the Scene's lights; Solid: 1 studio, 2 matcap, 3 flat.
+    shading: vec4<f32>,
+    // xyz: the camera's right and up directions.
+    camera_right: vec4<f32>,
+    camera_up: vec4<f32>,
+    // x, y: geometry cavity ridge and hollow strength (0 when it is off).
+    cavity: vec4<f32>,
+    // rgb: wireframe colour, linear; a: its opacity.
+    wire: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -62,6 +72,12 @@ struct ObjectUniforms {
 // y = roughness, z = 1 to use the material, w = normal map scale.
 
 @group(0) @binding(0) var<uniform> u: Globals;
+// One mask per light, white lets the light through.
+@group(0) @binding(1) var light_masks: texture_2d_array<f32>;
+@group(0) @binding(2) var light_mask_sampler: sampler;
+// The Solid mode's matcap, linear colour.
+@group(0) @binding(3) var matcap: texture_2d<f32>;
+@group(0) @binding(4) var matcap_sampler: sampler;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
@@ -195,10 +211,74 @@ fn lit_fraction(view: u32, point: vec3<f32>, angle: f32) -> f32 {
     return lit / f32(SHADOW_TAPS);
 }
 
+// Two directions across `forward`, the same for every pixel, so a mask
+// keeps its orientation.
+fn across(forward: vec3<f32>) -> mat2x3<f32> {
+    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
+    let right = normalize(cross(forward, up));
+    return mat2x3<f32>(right, cross(right, forward));
+}
+
+// How much of `light` its mask lets through to `world`, 0 to 1. A spot
+// light stretches the mask over its cone; a directional light repeats it,
+// one copy per pattern size, like sun through a window frame.
+fn mask_through(light: Light, world: vec3<f32>) -> f32 {
+    let layer = light.spot_inner.z;
+    if layer < 0.0 {
+        return 1.0;
+    }
+    var uv: vec2<f32>;
+    if light.position.w > 0.5 {
+        let forward = light.spot.xyz;
+        let offset = world - light.position.xyz;
+        let ahead = dot(offset, forward);
+        if ahead <= 0.0 {
+            return 0.0;
+        }
+        let cos_outer = light.spot.w;
+        let tan_outer = sqrt(max(1.0 - cos_outer * cos_outer, 1e-6)) / cos_outer;
+        let side = across(forward);
+        let at = vec2<f32>(dot(offset, side[0]), dot(offset, side[1])) / (ahead * tan_outer);
+        // Half a texel in from the edge, so the repeating sampler never
+        // wraps around.
+        uv = clamp(at * vec2<f32>(0.5, -0.5) + 0.5, vec2<f32>(0.001), vec2<f32>(0.999));
+    } else {
+        let side = across(-light.position.xyz);
+        uv = vec2<f32>(dot(world, side[0]), -dot(world, side[1])) / light.spot_inner.w + 0.5;
+    }
+    return textureSampleLevel(light_masks, light_mask_sampler, uv, i32(layer), 0.0).r;
+}
+
+// The Solid mode: light that ignores the Scene's lights, fixed to the view
+// so form reads the same from every side. `n` is the surface normal, `v`
+// the direction to the eye.
+fn solid_color(n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+    let mode = u.shading.x;
+    if mode > 2.5 {
+        // Flat: one colour, no light.
+        return albedo;
+    }
+    // The normal as the camera sees it: x right, y up, z towards the eye.
+    let facing = vec3<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz), dot(n, v));
+    if mode > 1.5 {
+        // The matcap's sphere, seen face on: the normal picks its point.
+        let uv = facing.xy * vec2<f32>(0.49, -0.49) + 0.5;
+        return textureSampleLevel(matcap, matcap_sampler, uv, 0.0).rgb * albedo;
+    }
+    // Studio: a key light from the upper left, a weaker fill from the right
+    // and soft light from above.
+    let key = max(dot(facing, normalize(vec3<f32>(-0.65, 0.55, 0.5))), 0.0);
+    let fill = max(dot(facing, normalize(vec3<f32>(0.75, 0.0, 0.6))), 0.0);
+    let sky = 0.12 + 0.08 * facing.y;
+    return albedo * (0.9 * key + 0.2 * fill + sky);
+}
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // How the mesh bends here: positive on ridges, negative in hollows.
+    @location(3) curvature: f32,
 };
 
 struct VertexOutput {
@@ -206,7 +286,15 @@ struct VertexOutput {
     @location(0) normal: vec3<f32>,
     @location(1) world_position: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) curvature: f32,
 };
+
+// The geometry cavity: brighter on ridges, darker in hollows.
+fn geometry_cavity(curvature: f32) -> f32 {
+    let ridge = u.cavity.x * max(curvature, 0.0);
+    let hollow = u.cavity.y * max(-curvature, 0.0);
+    return clamp(1.0 + 2.0 * (ridge - hollow), 0.0, 3.0);
+}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -216,6 +304,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_position = world.xyz;
     out.normal = (object.normal * vec4<f32>(in.normal, 0.0)).xyz;
     out.uv = in.uv;
+    out.curvature = in.curvature;
     return out;
 }
 
@@ -252,8 +341,30 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
+// The colour, and for the screen-space cavity the surface as the camera
+// sees it: rg the normal's x (right) and y (up) from -1..1 to 0..1; ba the
+// distance from the eye over MAX_SURFACE_DISTANCE in two 8-bit halves.
+// Where nothing was drawn it stays cleared to the farthest distance.
+const MAX_SURFACE_DISTANCE: f32 = 200.0;
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) normal: vec4<f32>,
+};
+
+fn shaded(color: vec3<f32>, n: vec3<f32>, world: vec3<f32>) -> FragmentOutput {
+    var out: FragmentOutput;
+    out.color = vec4<f32>(color, 1.0);
+    let facing = vec2<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz));
+    let distance = clamp(length(u.eye.xyz - world) / MAX_SURFACE_DISTANCE, 0.0, 0.999);
+    let high = floor(distance * 255.0) / 255.0;
+    let low = fract(distance * 255.0);
+    out.normal = vec4<f32>(facing * 0.5 + 0.5, high, low);
+    return out;
+}
+
 @fragment
-fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     var n = normalize(in.normal);
     if !front_facing {
         n = -n;
@@ -278,6 +389,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let n_dot_v = max(dot(n, v), 1e-4);
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
 
+    if u.shading.x > 0.5 {
+        var solid = solid_color(n, v, albedo) * geometry_cavity(in.curvature);
+        solid = mix(solid, object.highlight.rgb, object.highlight.a);
+        if u.params.y == 1u {
+            solid = pow(solid, vec3<f32>(1.0 / 2.2));
+        }
+        return shaded(solid, n, in.world_position);
+    }
+
     var direct = vec3<f32>(0.0);
     let shadow_angle = pixel_angle(in.clip_position.xy);
     let count = min(u.params.x, MAX_LIGHTS);
@@ -295,6 +415,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
                 attenuation *= smoothstep(light.spot.w, light.spot_inner.x, cos_angle);
             }
         }
+        attenuation *= mask_through(light, in.world_position);
         if light.spot_inner.y >= 0.0 {
             let point = in.world_position + n * NORMAL_OFFSET;
             var view = u32(light.spot_inner.y);
@@ -318,10 +439,28 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     }
     let ambient_light = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
     let ambient = ambient_light * ((1.0 - metallic) * albedo + f0 * (1.0 - roughness) * 0.5);
-    var color = direct + ambient;
+    var color = (direct + ambient) * geometry_cavity(in.curvature);
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
-    return vec4<f32>(color, 1.0);
+    return shaded(color, n, in.world_position);
+}
+
+// The wireframe: each mesh edge as a line, pulled a little towards the eye
+// so it is not hidden by the faces it borders.
+@vertex
+fn vs_wire(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    var clip = u.view_proj * object.model * vec4<f32>(position, 1.0);
+    clip.z -= 5e-5 * clip.w;
+    return clip;
+}
+
+@fragment
+fn fs_wire() -> @location(0) vec4<f32> {
+    var color = u.wire.rgb;
+    if u.params.y == 1u {
+        color = pow(color, vec3<f32>(1.0 / 2.2));
+    }
+    return vec4<f32>(color, u.wire.a);
 }

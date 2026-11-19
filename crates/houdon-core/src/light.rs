@@ -2,6 +2,8 @@
 
 use glam::Vec3;
 
+use crate::mask::LightMask;
+
 /// Identifies a light in a scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LightId(pub(crate) u64);
@@ -22,6 +24,12 @@ impl LightKind {
     /// Whether the light has a position, and so a distance and falloff.
     pub fn is_positional(self) -> bool {
         !matches!(self, Self::Directional)
+    }
+
+    /// Whether the light can shine through a mask: a spot light over its
+    /// cone, a directional light repeated across the scene.
+    pub fn takes_mask(self) -> bool {
+        matches!(self, Self::Directional | Self::Spot)
     }
 }
 
@@ -54,6 +62,8 @@ pub struct Light {
     /// from a bare bulb or the sun (0) to a large softbox (1). Shadows blur
     /// more the farther they fall from what casts them.
     pub shadow_softness: f32,
+    /// What the light shines through, for spot and directional lights.
+    pub mask: Option<LightMask>,
 }
 
 /// The apparent size of a light at full shadow softness, radians across.
@@ -89,6 +99,7 @@ impl Light {
             cone_angle: 40f32.to_radians(),
             softness: 0.3,
             shadow_softness: 0.15,
+            mask: None,
         }
     }
 

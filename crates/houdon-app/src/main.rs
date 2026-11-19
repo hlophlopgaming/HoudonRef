@@ -3,6 +3,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod masks;
+mod matcaps;
 mod studio;
 
 use app::HoudonApp;

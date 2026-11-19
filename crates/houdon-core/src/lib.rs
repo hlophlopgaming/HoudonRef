@@ -5,6 +5,8 @@
 
 pub mod camera;
 pub mod light;
+pub mod mask;
+pub mod matcap;
 pub mod model;
 pub mod room;
 pub mod scene;
@@ -13,10 +15,15 @@ pub mod units;
 
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
+pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
+pub use matcap::{Matcap, MatcapError, MatcapImage};
 pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
     MAX_LIGHTS, MIN_EYE_HEIGHT, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform,
 };
-pub use shading::{ColorSource, DEFAULT_CLAY_COLOR, Shading, Surface, ValueMode, ValueStudy};
+pub use shading::{
+    Cavity, ColorSource, DEFAULT_CLAY_COLOR, Lines, Shading, ShadingMode, SolidLighting, Surface,
+    ValueMode, ValueStudy,
+};
 pub use units::{Length, LengthUnit, UnitSystem};

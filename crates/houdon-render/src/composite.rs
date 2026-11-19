@@ -4,7 +4,13 @@
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
-use houdon_core::{ValueMode, ValueStudy};
+use houdon_core::{Lines, ValueMode};
+
+use crate::Frame;
+
+/// The scene's second picture: normals and distances as the camera sees
+/// them, for the screen-space cavity (see `FragmentOutput` in shader.wgsl).
+pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Depth buffer of the scene's own picture.
 pub const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
@@ -53,6 +59,9 @@ const SQUINT_SHARE: f32 = 0.03;
 struct ValueUniforms {
     params: [f32; 4],
     blur: [f32; 4],
+    cavity: [f32; 4],
+    lines: [f32; 4],
+    line_color: [f32; 4],
 }
 
 /// The scene's picture and depth at the current size.
@@ -64,17 +73,32 @@ pub struct SceneTarget {
     color_view: wgpu::TextureView,
     /// The multisampled picture drawn into and resolved into `color_view`.
     msaa_view: Option<wgpu::TextureView>,
+    /// The normals, and their multisampled version.
+    normal_view: wgpu::TextureView,
+    msaa_normal_view: Option<wgpu::TextureView>,
     pub depth_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
 }
 
 impl SceneTarget {
-    /// The view to draw the scene into and the one it resolves to, if any.
-    pub fn color_attachment(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
-        match &self.msaa_view {
-            Some(msaa) => (msaa, Some(&self.color_view)),
-            None => (&self.color_view, None),
-        }
+    /// The colour and normal views to draw the scene into, each with the
+    /// view it resolves to when multisampled.
+    pub fn attachments(&self) -> [(&wgpu::TextureView, Option<&wgpu::TextureView>); 2] {
+        [
+            pair(&self.color_view, self.msaa_view.as_ref()),
+            pair(&self.normal_view, self.msaa_normal_view.as_ref()),
+        ]
+    }
+}
+
+/// The view to draw into and the one it resolves to, if multisampled.
+fn pair<'a>(
+    single: &'a wgpu::TextureView,
+    msaa: Option<&'a wgpu::TextureView>,
+) -> (&'a wgpu::TextureView, Option<&'a wgpu::TextureView>) {
+    match msaa {
+        Some(msaa) => (msaa, Some(single)),
+        None => (single, None),
     }
 }
 
@@ -127,6 +151,16 @@ impl Composite {
                         min_binding_size: std::num::NonZeroU64::new(
                             size_of::<ValueUniforms>() as u64
                         ),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -192,15 +226,17 @@ impl Composite {
     }
 
     /// Makes sure the scene picture fits an output of `output_size` with
-    /// `anti_aliasing`, and writes the value study.
+    /// `anti_aliasing`, and writes the settings of `frame`'s overlays: the value
+    /// study, the screen-space cavity and the contour lines.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         output_size: [u32; 2],
         anti_aliasing: AntiAliasing,
-        value: &ValueStudy,
+        frame: &Frame,
     ) {
+        let (value, cavity, lines) = (&frame.value, &frame.cavity, &frame.lines);
         let max = device.limits().max_texture_dimension_2d;
         let scale = anti_aliasing.supersample;
         let size = output_size.map(|side| (side.max(1) * scale).min(max));
@@ -229,6 +265,24 @@ impl Composite {
         let uniforms = ValueUniforms {
             params: [mode, tones, value.balance.clamp(-1.0, 1.0), linear],
             blur: [1.0 / size[0] as f32, 1.0 / size[1] as f32, radius, 0.0],
+            cavity: if cavity.screen {
+                [cavity.screen_ridge, cavity.screen_hollow, scale as f32, 0.0]
+            } else {
+                [0.0, 0.0, scale as f32, 0.0]
+            },
+            lines: if lines.contours {
+                let thickness = lines.thickness.clamp(1.0, Lines::MAX_THICKNESS);
+                let sensitivity = lines.fold_sensitivity.clamp(0.0, 1.0);
+                [
+                    thickness * scale as f32 * 0.5,
+                    1.6 + (0.15 - 1.6) * sensitivity,
+                    0.0,
+                    0.0,
+                ]
+            } else {
+                [0.0; 4]
+            },
+            line_color: lines.color.extend(1.0).to_array(),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -276,6 +330,20 @@ impl Composite {
                 samples,
             )
         });
+        let normal_view = texture(
+            "houdon_scene_normals",
+            NORMAL_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            1,
+        );
+        let msaa_normal_view = (samples > 1).then(|| {
+            texture(
+                "houdon_scene_normals_msaa",
+                NORMAL_FORMAT,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+                samples,
+            )
+        });
         let depth_view = texture(
             "houdon_scene_depth",
             SCENE_DEPTH_FORMAT,
@@ -298,6 +366,10 @@ impl Composite {
                     binding: 2,
                     resource: self.uniforms.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&normal_view),
+                },
             ],
         });
         SceneTarget {
@@ -305,6 +377,8 @@ impl Composite {
             samples,
             color_view,
             msaa_view,
+            normal_view,
+            msaa_normal_view,
             depth_view,
             bind_group,
         }

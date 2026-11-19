@@ -48,6 +48,8 @@ fn the_scene_shader_runs_on_webgl2() {
         &[
             (naga::ShaderStage::Vertex, "vs_main"),
             (naga::ShaderStage::Fragment, "fs_main"),
+            (naga::ShaderStage::Vertex, "vs_wire"),
+            (naga::ShaderStage::Fragment, "fs_wire"),
         ],
     );
 }

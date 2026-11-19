@@ -6,11 +6,15 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
-    BuiltinRoom, ColorSource, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model,
-    ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem, ValueMode,
+    BuiltinRoom, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
+    LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId,
+    OrbitCamera, PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
+
+use crate::masks::{self, MaskLibrary};
+use crate::matcaps::{self, MatcapLibrary};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -131,6 +135,14 @@ pub struct Studio {
     units: UnitSystem,
     /// How the viewport smooths edges; an app setting.
     anti_aliasing: AntiAliasing,
+    /// Light mask images and the picker's state.
+    masks: MaskLibrary,
+    mask_picker_open: bool,
+    mask_category: masks::Category,
+    /// A mask chosen for a light while its image was still loading.
+    pending_mask: Option<(LightId, &'static str)>,
+    matcaps: MatcapLibrary,
+    matcap_picker_open: bool,
 }
 
 impl Studio {
@@ -144,6 +156,12 @@ impl Studio {
             incoming: Arc::default(),
             units: UnitSystem::default(),
             anti_aliasing: AntiAliasing::VIEWPORT,
+            masks: MaskLibrary::default(),
+            mask_picker_open: false,
+            mask_category: masks::Category::Windows,
+            pending_mask: None,
+            matcaps: MatcapLibrary::default(),
+            matcap_picker_open: false,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -200,6 +218,16 @@ impl Studio {
     }
 
     fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        // An image is a matcap while the matcap window is open (or an EXR,
+        // which only matcaps use), otherwise the selected light's mask.
+        match extension(name).as_str() {
+            "exr" => return self.load_matcap_file(name, bytes, tr),
+            "png" | "jpg" | "jpeg" if self.matcap_picker_open => {
+                return self.load_matcap_file(name, bytes, tr);
+            }
+            "png" | "jpg" | "jpeg" => return self.load_mask_file(name, bytes, tr),
+            _ => {}
+        }
         let source = format!("file:{name}:{}", bytes.len());
         let load = || Model::from_gltf_slice(name, bytes);
         if let Err(error) = self.add_object_from(source, load, None, Transform::default()) {
@@ -219,7 +247,7 @@ impl Studio {
         for file in dropped {
             let name = file_name(file.path());
             match extension(&name).as_str() {
-                "glb" | "gltf" => {}
+                "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => {}
                 "blend" => {
                     self.message = Some(tr.tr("error-blend-file"));
                     continue;
@@ -279,6 +307,186 @@ impl Studio {
             });
 
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, tr));
+
+        for name in self.masks.poll() {
+            if let Some((light, pending)) = self.pending_mask
+                && pending == name
+            {
+                self.pending_mask = None;
+                self.choose_mask(ui.ctx(), light, name);
+            }
+        }
+        if self.mask_picker_open {
+            self.mask_picker(&ui.ctx().clone(), tr);
+        }
+        if self.matcap_picker_open {
+            self.matcap_picker(&ui.ctx().clone(), tr);
+        }
+    }
+
+    /// The window to pick the Solid mode's matcap.
+    fn matcap_picker(&mut self, ctx: &egui::Context, tr: &Localizer) {
+        let mut open = true;
+        egui::Window::new(tr.tr("matcap-picker"))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for &(name, _) in matcaps::BUILT_IN {
+                                let Some(texture) = self.matcaps.thumbnail(ctx, name) else {
+                                    continue;
+                                };
+                                let button = egui::Button::image(
+                                    egui::Image::new(&texture)
+                                        .fit_to_exact_size(egui::vec2(64.0, 64.0)),
+                                );
+                                if ui.add(button).on_hover_text(name).clicked() {
+                                    chosen = Some(name);
+                                }
+                            }
+                        });
+                    });
+                ui.separator();
+                ui.weak(tr.tr("matcap-picker-hint"));
+                ui.weak(tr.tr("matcap-credit"));
+                if let Some(name) = chosen
+                    && let Some(image) = self.matcaps.image(name)
+                {
+                    self.set_matcap(name.to_owned(), image);
+                }
+            });
+        self.matcap_picker_open = open;
+    }
+
+    fn set_matcap(&mut self, name: String, image: Arc<MatcapImage>) {
+        let shading = &mut self.scene.shading;
+        shading.matcap = Some(Matcap { name, image });
+        shading.mode = ShadingMode::Solid;
+        shading.solid = SolidLighting::Matcap;
+    }
+
+    /// Uses a dropped image as the Solid mode's matcap.
+    fn load_matcap_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        match MatcapImage::decode(bytes) {
+            Ok(image) => {
+                self.set_matcap(name.to_owned(), Arc::new(image));
+                self.message = None;
+            }
+            Err(error) => {
+                log::warn!("{name}: {error}");
+                self.message = Some(tr.tr_args(
+                    "error-matcap-unreadable",
+                    &[("name", name.to_owned().into())],
+                ));
+            }
+        }
+    }
+
+    /// The window to pick a light mask for the selected light.
+    fn mask_picker(&mut self, ctx: &egui::Context, tr: &Localizer) {
+        let mut open = true;
+        egui::Window::new(tr.tr("mask-picker"))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for category in masks::Category::ALL {
+                        ui.selectable_value(
+                            &mut self.mask_category,
+                            category,
+                            tr.tr(category.message_id()),
+                        );
+                    }
+                });
+                ui.separator();
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            let names = masks::ALL
+                                .iter()
+                                .filter(|name| masks::Category::of(name) == self.mask_category);
+                            for &name in names {
+                                let size = egui::vec2(64.0, 64.0);
+                                let response = match self.masks.thumbnail(ctx, name) {
+                                    Some(texture) => ui.add(egui::Button::image(
+                                        egui::Image::new(&texture).fit_to_exact_size(size),
+                                    )),
+                                    None if self.masks.failed(name) => ui.add_sized(
+                                        size,
+                                        egui::Button::new(tr.tr("mask-unavailable")),
+                                    ),
+                                    None => ui.add_sized(size, egui::Spinner::new()),
+                                };
+                                if response.on_hover_text(name).clicked() {
+                                    chosen = Some(name);
+                                }
+                            }
+                        });
+                    });
+                ui.separator();
+                ui.weak(tr.tr("mask-picker-hint"));
+                ui.weak(tr.tr("mask-credit"));
+                if let (Some(name), Some(light)) = (chosen, self.selected_light) {
+                    self.choose_mask(ctx, light, name);
+                }
+            });
+        self.mask_picker_open = open;
+    }
+
+    /// Gives `light` the built-in mask `name`, now or once it has loaded.
+    fn choose_mask(&mut self, ctx: &egui::Context, light: LightId, name: &'static str) {
+        match self.masks.image(ctx, name) {
+            Some(image) => self.set_mask(light, name.to_owned(), image),
+            None => self.pending_mask = Some((light, name)),
+        }
+    }
+
+    /// Puts a mask image on a light, keeping the pattern size it had.
+    fn set_mask(&mut self, id: LightId, name: String, image: Arc<MaskImage>) {
+        let Some(mut light) = self.scene.light(id).cloned() else {
+            return;
+        };
+        if !light.kind.takes_mask() {
+            return;
+        }
+        let pattern_size = light
+            .mask
+            .as_ref()
+            .map_or(DEFAULT_PATTERN_SIZE, |m| m.pattern_size);
+        light.mask = Some(LightMask {
+            pattern_size,
+            ..LightMask::new(name, image)
+        });
+        self.scene.set_light(light);
+    }
+
+    /// Uses a dropped image as the selected light's mask.
+    fn load_mask_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        let image = match MaskImage::decode(bytes) {
+            Ok(image) => Arc::new(image),
+            Err(error) => {
+                log::warn!("{name}: {error}");
+                self.message =
+                    Some(tr.tr_args("error-mask-unreadable", &[("name", name.to_owned().into())]));
+                return;
+            }
+        };
+        let light = self
+            .selected_light
+            .filter(|id| self.scene.light(*id).is_some_and(|l| l.kind.takes_mask()));
+        match light {
+            Some(id) => {
+                self.set_mask(id, name.to_owned(), image);
+                self.message = None;
+            }
+            None => self.message = Some(tr.tr("error-mask-needs-light")),
+        }
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -355,6 +563,8 @@ impl Studio {
         ui.separator();
         self.lights_section(ui, tr);
         ui.separator();
+        self.shading_section(ui, tr);
+        ui.separator();
         self.color_section(ui, tr);
         ui.separator();
         self.values_section(ui, tr);
@@ -387,6 +597,55 @@ impl Studio {
         }
         ui.add(egui::Slider::new(&mut study.squint, 0.0..=1.0).text(tr.tr("values-squint")));
         ui.weak(tr.tr("values-hint"));
+    }
+
+    fn shading_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-shading"));
+        let shading = &mut self.scene.shading;
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(
+                &mut shading.mode,
+                ShadingMode::Solid,
+                tr.tr("shading-solid"),
+            );
+            ui.selectable_value(&mut shading.mode, ShadingMode::Lit, tr.tr("shading-lit"));
+            ui.add_enabled(
+                false,
+                egui::Button::selectable(false, tr.tr("shading-render")),
+            )
+            .on_disabled_hover_text(tr.tr("shading-render-later"));
+        });
+        cavity_controls(ui, tr, &mut shading.cavity);
+        line_controls(ui, tr, &mut shading.lines);
+        ui.checkbox(
+            &mut shading.backface_culling,
+            tr.tr("studio-backface-culling"),
+        )
+        .on_hover_text(tr.tr("backface-culling-hint"));
+        if shading.mode != ShadingMode::Solid {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for lighting in SolidLighting::ALL {
+                ui.selectable_value(
+                    &mut shading.solid,
+                    lighting,
+                    tr.tr(solid_lighting_message_id(lighting)),
+                );
+            }
+        });
+        if shading.solid == SolidLighting::Matcap {
+            ui.horizontal(|ui| {
+                ui.label(tr.tr("studio-matcap"));
+                let name = shading
+                    .matcap
+                    .as_ref()
+                    .map_or_else(|| tr.tr("studio-matcap-none"), |m| m.name.clone());
+                if ui.button(name).clicked() {
+                    self.matcap_picker_open = true;
+                }
+            });
+        }
     }
 
     fn color_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -587,6 +846,30 @@ impl Studio {
                 egui::Slider::new(&mut light.softness, 0.0..=1.0)
                     .text(tr.tr("studio-light-softness")),
             );
+        }
+
+        if light.kind.takes_mask() {
+            ui.horizontal(|ui| {
+                ui.label(tr.tr("studio-light-mask"));
+                let name = light
+                    .mask
+                    .as_ref()
+                    .map_or_else(|| tr.tr("studio-light-mask-none"), |m| m.name.clone());
+                if ui.button(name).clicked() {
+                    self.mask_picker_open = true;
+                }
+                if light.mask.is_some() && ui.button(tr.tr("studio-light-mask-remove")).clicked() {
+                    light.mask = None;
+                }
+            });
+            if light.kind == LightKind::Directional
+                && let Some(mask) = &mut light.mask
+            {
+                ui.horizontal(|ui| {
+                    length_field(ui, tr, self.units, &mut mask.pattern_size, 0.05..=50.0);
+                    ui.label(tr.tr("studio-light-mask-pattern"));
+                });
+            }
         }
 
         if remove {
@@ -923,6 +1206,94 @@ fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
         size.x.round().max(1.0) as u32,
         size.y.round().max(1.0) as u32,
     ]
+}
+
+/// Contour lines and the wireframe.
+fn line_controls(ui: &mut egui::Ui, tr: &Localizer, lines: &mut Lines) {
+    let color_button = |ui: &mut egui::Ui, color: &mut glam::Vec3| {
+        let mut rgb = color.to_array();
+        if ui.color_edit_button_rgb(&mut rgb).changed() {
+            *color = glam::Vec3::from(rgb);
+        }
+    };
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut lines.contours, tr.tr("studio-contours"))
+            .on_hover_text(tr.tr("contours-hint"));
+        if lines.contours {
+            color_button(ui, &mut lines.color);
+        }
+    });
+    if lines.contours {
+        ui.indent("contours", |ui| {
+            ui.add(
+                egui::Slider::new(&mut lines.thickness, 1.0..=Lines::MAX_THICKNESS)
+                    .suffix(" px")
+                    .text(tr.tr("contours-thickness")),
+            );
+            ui.add(
+                egui::Slider::new(&mut lines.fold_sensitivity, 0.0..=1.0)
+                    .text(tr.tr("contours-folds")),
+            );
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut lines.wireframe, tr.tr("studio-wireframe"));
+        if lines.wireframe {
+            color_button(ui, &mut lines.wireframe_color);
+        }
+    });
+    if lines.wireframe {
+        ui.indent("wireframe", |ui| {
+            ui.add(
+                egui::Slider::new(&mut lines.wireframe_opacity, 0.0..=1.0)
+                    .text(tr.tr("wireframe-opacity")),
+            );
+        });
+    }
+}
+
+/// The cavity overlay's two kinds, each with its ridge and hollow strength.
+fn cavity_controls(ui: &mut egui::Ui, tr: &Localizer, cavity: &mut Cavity) {
+    ui.label(tr.tr("studio-cavity"))
+        .on_hover_text(tr.tr("cavity-hint"));
+    let kinds = [
+        (
+            "cavity-geometry",
+            &mut cavity.geometry,
+            &mut cavity.geometry_ridge,
+            &mut cavity.geometry_hollow,
+        ),
+        (
+            "cavity-screen",
+            &mut cavity.screen,
+            &mut cavity.screen_ridge,
+            &mut cavity.screen_hollow,
+        ),
+    ];
+    for (label, on, ridge, hollow) in kinds {
+        ui.checkbox(on, tr.tr(label));
+        if *on {
+            ui.indent(label, |ui| {
+                ui.add(
+                    egui::Slider::new(ridge, 0.0..=Cavity::MAX_STRENGTH)
+                        .text(tr.tr("cavity-ridge")),
+                );
+                ui.add(
+                    egui::Slider::new(hollow, 0.0..=Cavity::MAX_STRENGTH)
+                        .text(tr.tr("cavity-hollow")),
+                );
+            });
+        }
+    }
+}
+
+/// Message id of a Solid light's name.
+fn solid_lighting_message_id(lighting: SolidLighting) -> &'static str {
+    match lighting {
+        SolidLighting::Studio => "solid-studio",
+        SolidLighting::Matcap => "solid-matcap",
+        SolidLighting::Flat => "solid-flat",
+    }
 }
 
 /// Message id of a colour source's name.

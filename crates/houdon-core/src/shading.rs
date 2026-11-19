@@ -4,6 +4,7 @@
 use glam::Vec3;
 
 use crate::ObjectId;
+use crate::matcap::Matcap;
 
 /// Where an object's colour comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -24,8 +25,116 @@ impl ColorSource {
 /// Neutral light-grey clay, linear.
 pub const DEFAULT_CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
 
+/// How surfaces are lit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ShadingMode {
+    /// A fixed light that ignores the Scene's Lights, to read form alone.
+    Solid,
+    /// The Scene's Lights, shadows and Room.
+    #[default]
+    Lit,
+}
+
+/// The light of the Solid mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SolidLighting {
+    /// A soft studio light that turns with the view.
+    #[default]
+    Studio,
+    /// Colour from a matcap, a picture of a lit sphere.
+    Matcap,
+    /// No light at all: one flat colour per object.
+    Flat,
+}
+
+impl SolidLighting {
+    pub const ALL: [Self; 3] = [Self::Studio, Self::Matcap, Self::Flat];
+}
+
+/// The cavity overlay: brightens ridges and darkens hollows so small
+/// changes of form read, in Solid and Lit.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cavity {
+    /// From the mesh's curvature: stable while the camera moves.
+    pub geometry: bool,
+    pub geometry_ridge: f32,
+    pub geometry_hollow: f32,
+    /// From the picture's normals: fine detail at any distance.
+    pub screen: bool,
+    pub screen_ridge: f32,
+    pub screen_hollow: f32,
+}
+
+impl Cavity {
+    /// The largest ridge or hollow strength.
+    pub const MAX_STRENGTH: f32 = 2.0;
+
+    pub fn is_on(&self) -> bool {
+        self.geometry || self.screen
+    }
+}
+
+impl Default for Cavity {
+    fn default() -> Self {
+        Self {
+            geometry: false,
+            geometry_ridge: 1.0,
+            geometry_hollow: 1.0,
+            screen: false,
+            screen_ridge: 1.0,
+            screen_hollow: 1.0,
+        }
+    }
+}
+
+/// Line overlays for studying the drawing of a form, in Solid and Lit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lines {
+    /// Contour lines: silhouettes and the inner folds of a form.
+    pub contours: bool,
+    /// Line width, pixels.
+    pub thickness: f32,
+    /// Linear RGB.
+    pub color: Vec3,
+    /// 0 draws only outlines and the sharpest folds, 1 every soft fold.
+    pub fold_sensitivity: f32,
+    /// The mesh's edges, to see the planes of a planar model.
+    pub wireframe: bool,
+    pub wireframe_color: Vec3,
+    pub wireframe_opacity: f32,
+}
+
+impl Lines {
+    pub const MAX_THICKNESS: f32 = 4.0;
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            contours: false,
+            thickness: 1.0,
+            color: Vec3::ZERO,
+            fold_sensitivity: 0.3,
+            wireframe: false,
+            wireframe_color: Vec3::ZERO,
+            wireframe_opacity: 0.5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Shading {
+    pub mode: ShadingMode,
+    pub solid: SolidLighting,
+    /// The matcap of [`SolidLighting::Matcap`]; without one, Studio light.
+    pub matcap: Option<Matcap>,
+    /// Off by default.
+    pub cavity: Cavity,
+    /// Off by default.
+    pub lines: Lines,
+    /// Hide the back of surfaces, as if every object were closed and seen
+    /// from outside. Off by default: imported meshes are often open.
+    pub backface_culling: bool,
     pub color: ColorSource,
     /// The Clay tone, linear RGB.
     pub clay_color: Vec3,
@@ -36,6 +145,12 @@ pub struct Shading {
 impl Default for Shading {
     fn default() -> Self {
         Self {
+            mode: ShadingMode::default(),
+            solid: SolidLighting::default(),
+            matcap: None,
+            cavity: Cavity::default(),
+            lines: Lines::default(),
+            backface_culling: false,
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
             value: ValueStudy::default(),

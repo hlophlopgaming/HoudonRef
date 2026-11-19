@@ -5,9 +5,13 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
-use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
+use houdon_core::{
+    Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, ShadingMode, SolidLighting, Vertex,
+};
 
-use crate::composite::{AntiAliasing, Composite, SCENE_DEPTH_FORMAT};
+use crate::composite::{AntiAliasing, Composite, NORMAL_FORMAT, SCENE_DEPTH_FORMAT};
+use crate::light_mask::MaskTextures;
+use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
 use crate::{Frame, FrameSurface, ObjectColors};
@@ -31,14 +35,32 @@ struct Globals {
     eye: [f32; 4],
     /// x: number of lights; y: 1 if the output needs gamma encoding.
     params: [u32; 4],
+    /// x: how surfaces are lit, one of the `SHADE_*` codes.
+    shading: [f32; 4],
+    /// xyz: the camera's right and up directions.
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+    /// x, y: geometry cavity ridge and hollow strength (0 when it is off).
+    cavity: [f32; 4],
+    /// rgb: wireframe colour, linear; a: its opacity.
+    wire: [f32; 4],
     lights: [GpuLight; MAX_LIGHTS],
 }
+
+/// `Globals::shading.x`: the Scene's lights, or one of the Solid lights.
+const SHADE_LIT: f32 = 0.0;
+const SHADE_STUDIO: f32 = 1.0;
+const SHADE_MATCAP: f32 = 2.0;
+const SHADE_FLAT: f32 = 3.0;
 
 /// `spot.w` of a light without a cone; the shader tests `spot.w > -1.5`.
 const NO_CONE: f32 = -2.0;
 
 /// `spot_inner.y` of a light without shadows; otherwise its first shadow view.
 const NO_SHADOW: f32 = -1.0;
+
+/// `spot_inner.z` of a light without a mask; otherwise its mask layer.
+const NO_MASK: f32 = -1.0;
 
 /// One light as the shader sees it.
 #[repr(C)]
@@ -51,29 +73,40 @@ struct GpuLight {
     /// xyz: direction the spot points; w: cosine of the outer half angle,
     /// or -2 for lights without a cone.
     spot: [f32; 4],
-    /// x: cosine of the inner half angle; y: first shadow view, or -1.
+    /// x: cosine of the inner half angle; y: first shadow view, or -1;
+    /// z: mask layer, or -1; w: a directional light's mask pattern size.
     spot_inner: [f32; 4],
 }
 
 impl GpuLight {
-    fn new(light: &Light, centre: Vec3, first_shadow_view: Option<u32>) -> Self {
+    fn new(
+        light: &Light,
+        centre: Vec3,
+        first_shadow_view: Option<u32>,
+        mask_layer: Option<u32>,
+    ) -> Self {
         let shadow = first_shadow_view.map_or(NO_SHADOW, |v| v as f32);
+        let mask = mask_layer.map_or(NO_MASK, |layer| layer as f32);
+        let pattern = light
+            .mask
+            .as_ref()
+            .map_or(1.0, |m| m.pattern_size.max(0.01));
         let color = (light.color * light.intensity).extend(0.0).to_array();
         match light.kind {
             LightKind::Directional => Self {
                 position: light.direction().extend(0.0).to_array(),
                 color,
                 spot: [0.0, 0.0, 0.0, NO_CONE],
-                spot_inner: [0.0, shadow, 0.0, 0.0],
+                spot_inner: [0.0, shadow, mask, pattern],
             },
             LightKind::Point | LightKind::Spot => {
                 let position = light.position(centre);
                 let (spot, spot_inner) = if light.kind == LightKind::Spot {
                     let (outer, inner) = light.cone_cosines();
                     let aim = (centre - position).normalize_or(Vec3::NEG_Y);
-                    (aim.extend(outer).to_array(), [inner, shadow, 0.0, 0.0])
+                    (aim.extend(outer).to_array(), [inner, shadow, mask, pattern])
                 } else {
-                    ([0.0, 0.0, 0.0, NO_CONE], [0.0, shadow, 0.0, 0.0])
+                    ([0.0, 0.0, 0.0, NO_CONE], [0.0, shadow, NO_MASK, 0.0])
                 };
                 Self {
                     position: position.extend(1.0).to_array(),
@@ -113,11 +146,19 @@ struct DrawEntry {
     material: Option<(ModelId, usize)>,
     one_sided: bool,
     casts_shadows: bool,
+    /// Draw the object's wireframe with this entry: its first part, never
+    /// the room.
+    wireframe: bool,
 }
 
 pub(crate) struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
+    /// One curvature per vertex, for the geometry cavity.
+    curvature_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    /// Pairs of indices, one per edge, for the wireframe.
+    edge_buffer: wgpu::Buffer,
+    edge_index_count: u32,
 }
 
 /// GPU resources for drawing frames. One renders the viewport (stored in
@@ -129,7 +170,12 @@ pub struct SceneRenderer {
     /// Rebuilt when the multisampling changes.
     pipelines: ScenePipelines,
     globals_buffer: wgpu::Buffer,
+    globals_layout: wgpu::BindGroupLayout,
     globals_bind_group: wgpu::BindGroup,
+    masks: MaskTextures,
+    matcap: MatcapTexture,
+    /// Whether the last prepared frame draws wireframes.
+    wireframe: bool,
     object_layout: wgpu::BindGroupLayout,
     object_buffer: wgpu::Buffer,
     object_bind_group: wgpu::BindGroup,
@@ -180,8 +226,9 @@ impl SceneRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let globals_layout =
-            uniform_layout(device, "houdon_globals_layout", size_of::<Globals>(), false);
+        let globals_layout = globals_layout(device);
+        let masks = MaskTextures::new(device);
+        let matcap = MatcapTexture::new(device);
         let object_layout = uniform_layout(
             device,
             "houdon_object_layout",
@@ -210,14 +257,8 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("houdon_globals_bind_group"),
-            layout: &globals_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
-        });
+        let globals_bind_group =
+            globals_bind_group(device, &globals_layout, &globals_buffer, &masks, &matcap);
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let object_stride = (size_of::<ObjectUniforms>() as u64).div_ceil(alignment) * alignment;
@@ -231,7 +272,11 @@ impl SceneRenderer {
             target_format,
             pipelines,
             globals_buffer,
+            globals_layout,
             globals_bind_group,
+            masks,
+            matcap,
+            wireframe: false,
             object_layout,
             object_buffer,
             object_bind_group,
@@ -280,7 +325,7 @@ impl SceneRenderer {
         let mut uniforms = Vec::new();
         for object in &frame.objects {
             let model = &object.model;
-            for part in &model.parts {
+            for (part_index, part) in model.parts.iter().enumerate() {
                 let material = match object.surface {
                     FrameSurface::Materials => part.material,
                     FrameSurface::Colors(_) => None,
@@ -317,8 +362,9 @@ impl SceneRenderer {
                     model_id: object.model_id,
                     part: *part,
                     material: material.map(|m| (object.model_id, m)),
-                    one_sided: object.one_sided,
+                    one_sided: object.one_sided || frame.backface_culling,
                     casts_shadows: object.casts_shadows,
+                    wireframe: part_index == 0 && !object.one_sided,
                 });
             }
         }
@@ -344,14 +390,16 @@ impl SceneRenderer {
         self.draw_list = entries;
 
         let shadow_layout = ShadowLayout::new(frame);
+        let mask_layers = self.masks.prepare(queue, &frame.lights);
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
         let count = frame.lights.len().min(MAX_LIGHTS);
-        for ((slot, light), first_view) in lights
+        for (((slot, light), first_view), mask_layer) in lights
             .iter_mut()
             .zip(&frame.lights)
             .zip(&shadow_layout.first_view)
+            .zip(&mask_layers)
         {
-            *slot = GpuLight::new(light, frame.light_centre, *first_view);
+            *slot = GpuLight::new(light, frame.light_centre, *first_view, *mask_layer);
         }
         let room = &frame.room;
         let globals = Globals {
@@ -363,6 +411,24 @@ impl SceneRenderer {
             floor_color: room.floor_color.extend(0.0).to_array(),
             eye: frame.eye.extend(1.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
+            shading: [self.shade_code(device, queue, frame), 0.0, 0.0, 0.0],
+            camera_right: frame.camera_right.extend(0.0).to_array(),
+            camera_up: frame.camera_up.extend(0.0).to_array(),
+            wire: frame
+                .lines
+                .wireframe_color
+                .extend(frame.lines.wireframe_opacity.clamp(0.0, 1.0))
+                .to_array(),
+            cavity: if frame.cavity.geometry {
+                [
+                    frame.cavity.geometry_ridge,
+                    frame.cavity.geometry_hollow,
+                    0.0,
+                    0.0,
+                ]
+            } else {
+                [0.0; 4]
+            },
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
@@ -396,8 +462,9 @@ impl SceneRenderer {
                 anti_aliasing.samples,
             );
         }
+        self.wireframe = frame.lines.wireframe && frame.lines.wireframe_opacity > 0.0;
         self.composite
-            .prepare(device, queue, size, anti_aliasing, &frame.value);
+            .prepare(device, queue, size, anti_aliasing, frame);
         let Some(target) = &self.composite.target else {
             return;
         };
@@ -407,34 +474,104 @@ impl SceneRenderer {
         } else {
             frame.room.backdrop_color.to_array().map(f64::from)
         };
-        let (view, resolve_target) = target.color_attachment();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("houdon_scene_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        // Only the resolved pictures are read afterwards. With a wireframe
+        // the colour is resolved after the wireframe pass instead, which
+        // draws over it and needs the scene's depth.
+        let wireframe = self.wireframe;
+        let attachment = |(view, resolve_target): (_, Option<_>), clear, resolve| {
+            let resolve_target = if resolve { resolve_target } else { None };
+            Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
-                    // Only the resolved picture is read afterwards.
+                    load: wgpu::LoadOp::Clear(clear),
                     store: if resolve_target.is_some() {
                         wgpu::StoreOp::Discard
                     } else {
                         wgpu::StoreOp::Store
                     },
                 },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &target.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+            })
+        };
+        let keep = if wireframe {
+            wgpu::StoreOp::Store
+        } else {
+            wgpu::StoreOp::Discard
+        };
+        let [color, normals] = target.attachments();
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_scene_pass"),
+                color_attachments: &[
+                    attachment(color, wgpu::Color { r, g, b, a: 1.0 }, !wireframe),
+                    // No surface: the farthest distance.
+                    attachment(normals, wgpu::Color::WHITE, true),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: keep,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        self.draw_scene(&mut pass);
+                ..Default::default()
+            });
+            self.draw_scene(&mut pass);
+        }
+        if wireframe {
+            // Its own pass: WebGL2 cannot blend one target and not another.
+            let (view, resolve_target) = color;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_wireframe_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: if resolve_target.is_some() {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            self.draw_wireframe(&mut pass);
+        }
+    }
+
+    /// How `frame`'s surfaces are lit, uploading its matcap if it uses one.
+    fn shade_code(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) -> f32 {
+        match (frame.shading_mode, frame.solid, &frame.matcap) {
+            (ShadingMode::Lit, ..) => SHADE_LIT,
+            (ShadingMode::Solid, SolidLighting::Flat, _) => SHADE_FLAT,
+            (ShadingMode::Solid, SolidLighting::Matcap, Some(image)) => {
+                if self.matcap.prepare(device, queue, image) {
+                    self.globals_bind_group = globals_bind_group(
+                        device,
+                        &self.globals_layout,
+                        &self.globals_buffer,
+                        &self.masks,
+                        &self.matcap,
+                    );
+                }
+                SHADE_MATCAP
+            }
+            // Without a matcap, the Studio light.
+            (ShadingMode::Solid, ..) => SHADE_STUDIO,
+        }
     }
 
     /// Puts the last prepared picture into `render_pass`, as a value study
@@ -459,8 +596,30 @@ impl SceneRenderer {
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, mesh.curvature_buffer.slice(..));
             render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(part_range(&entry.part), 0, 0..1);
+        }
+    }
+
+    /// The edges of every object but the room, over the drawn scene.
+    fn draw_wireframe(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_pipeline(&self.pipelines.wireframe);
+        render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
+        render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
+        for (i, entry) in self.draw_list.iter().enumerate() {
+            let Some(mesh) = self.meshes.get(&entry.model_id) else {
+                continue;
+            };
+            if !entry.wireframe {
+                continue;
+            }
+            let offset = (i as u64 * self.object_stride) as u32;
+            render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
+            render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.edge_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.edge_index_count, 0, 0..1);
         }
     }
 }
@@ -479,6 +638,8 @@ struct ScenePipelines {
     /// The room is drawn from inside only, so it can be seen through from
     /// outside.
     one_sided: wgpu::RenderPipeline,
+    /// The meshes' edges as lines over their surfaces.
+    wireframe: wgpu::RenderPipeline,
 }
 
 impl ScenePipelines {
@@ -504,8 +665,63 @@ impl ScenePipelines {
             samples,
             two_sided: pipeline(None, "houdon_scene_pipeline"),
             one_sided: pipeline(Some(wgpu::Face::Back), "houdon_one_sided_pipeline"),
+            wireframe: wireframe_pipeline(device, pipeline_layout, shader, target_format, samples),
         }
     }
+}
+
+fn wireframe_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("houdon_wireframe_pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_wire"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        // Seen where the surface is; the shader pulls lines a little
+        // towards the eye so they win over their own faces.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SCENE_DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_wire"),
+            // Colour only: the surfaces under the lines stay as they are
+            // for the screen-space overlays.
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn scene_pipeline(
@@ -527,6 +743,10 @@ fn scene_pipeline(
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+            }), Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<f32>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![3 => Float32],
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -549,15 +769,108 @@ fn scene_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &[
+                Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: NORMAL_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         multiview_mask: None,
         cache: None,
+    })
+}
+
+/// Bind group 0: the frame's globals and the light masks.
+fn globals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("houdon_globals_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(size_of::<Globals>() as u64),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+fn globals_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    masks: &MaskTextures,
+    matcap: &MatcapTexture,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("houdon_globals_bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&masks.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&masks.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&matcap.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&matcap.sampler),
+            },
+        ],
     })
 }
 
@@ -610,10 +923,22 @@ fn object_resources(
 }
 
 fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
+    let edges = edge_indices(&model.indices);
     GpuMesh {
+        edge_index_count: edges.len() as u32,
+        edge_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("houdon_mesh_edges"),
+            contents: bytemuck::cast_slice(&edges),
+            usage: wgpu::BufferUsages::INDEX,
+        }),
         vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("houdon_mesh_vertices"),
             contents: bytemuck::cast_slice(&model.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        }),
+        curvature_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("houdon_mesh_curvature"),
+            contents: bytemuck::cast_slice(&model.vertex_curvature()),
             usage: wgpu::BufferUsages::VERTEX,
         }),
         index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -622,6 +947,24 @@ fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
             usage: wgpu::BufferUsages::INDEX,
         }),
     }
+}
+
+/// Each triangle edge once, as pairs of vertex indices.
+fn edge_indices(indices: &[u32]) -> Vec<u32> {
+    let mut seen = std::collections::HashSet::new();
+    let mut edges = Vec::new();
+    for tri in indices.as_chunks::<3>().0 {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            if seen.insert((a.min(b), a.max(b))) {
+                edges.extend([a, b]);
+            }
+        }
+    }
+    // An index buffer may not be empty.
+    if edges.is_empty() {
+        edges.extend([0, 0]);
+    }
+    edges
 }
 
 /// The Studio viewport for one egui frame.
