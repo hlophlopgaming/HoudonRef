@@ -273,9 +273,19 @@ impl Scene {
     /// object stands at the origin; later ones stand on the ground beside
     /// the others, so nothing overlaps.
     pub fn add_object(&mut self, model: ModelId) -> Option<ObjectId> {
+        self.add_object_with(model, Transform::default())
+    }
+
+    /// Places a new object with the given rotation and size beside the
+    /// others; the translation is chosen by the placement.
+    pub fn add_object_with(
+        &mut self,
+        model: ModelId,
+        mut transform: Transform,
+    ) -> Option<ObjectId> {
         let figure = self.models.get(&model)?.model.looks_like_figure();
         let scene_bounds = self.bounds();
-        let mut transform = Transform::default();
+        transform.translation = Vec3::ZERO;
         if !scene_bounds.is_empty() {
             transform.translation.z = scene_bounds.center().z;
         }
@@ -650,6 +660,38 @@ mod tests {
         assert!(b.min.y.abs() < 1e-4, "the new object stands on the ground");
         let all = scene.bounds();
         assert!(all.min.x <= a.min.x && all.max.x >= b.max.x);
+    }
+
+    #[test]
+    fn a_turned_object_is_placed_by_its_turned_size() {
+        let mut scene = Scene::new();
+        let wide = scene.add_model(Model::from_mesh(
+            "plank",
+            vec![
+                Vec3::new(-1.0, 0.0, -0.1),
+                Vec3::new(1.0, 0.0, -0.1),
+                Vec3::new(1.0, 0.2, 0.1),
+                Vec3::new(-1.0, 0.2, 0.1),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        ));
+        let first = scene.add_object(wide).unwrap();
+        let turned = Transform {
+            rotation: Vec3::new(0.0, std::f32::consts::FRAC_PI_2, 0.0),
+            ..Transform::default()
+        };
+        let second = scene.add_object_with(wide, turned).unwrap();
+        let a = scene.object_bounds(scene.object(first).unwrap());
+        let b = scene.object_bounds(scene.object(second).unwrap());
+        assert!(
+            b.size().x < 0.5,
+            "turned a quarter, the plank is narrow along X"
+        );
+        let gap = b.min.x - a.max.x;
+        assert!(
+            (0.0..0.2).contains(&gap),
+            "placed by its turned size: gap {gap}"
+        );
     }
 
     #[test]

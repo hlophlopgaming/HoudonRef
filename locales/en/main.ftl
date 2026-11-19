@@ -88,3 +88,8 @@ color-material = Material
 color-clay = Clay
 color-random = Random
 studio-clay-tone = Clay tone
+
+studio-add-asaro-head = Add Asaro head
+studio-add-planar-head = Add planar head
+model-asaro-head = Asaro head
+model-planar-head = planar head

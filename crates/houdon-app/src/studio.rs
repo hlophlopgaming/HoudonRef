@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use houdon_core::Transform;
 use houdon_core::{
     BuiltinRoom, ColorSource, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model,
     ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
@@ -13,20 +14,56 @@ use houdon_render::{Frame, ViewportCallback};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
+const ASARO_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/asaro_head.glb");
+const PLANAR_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/planar_head.glb");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Builtin {
     Male,
     Female,
+    AsaroHead,
+    PlanarHead,
 }
 
 impl Builtin {
-    const ALL: [Self; 2] = [Self::Male, Self::Female];
+    const ALL: [Self; 4] = [Self::Male, Self::Female, Self::AsaroHead, Self::PlanarHead];
 
     fn name_and_bytes(self) -> (&'static str, &'static [u8]) {
         match self {
             Self::Male => ("male", MALE_GLB),
             Self::Female => ("female", FEMALE_GLB),
+            Self::AsaroHead => ("asaro-head", ASARO_HEAD_GLB),
+            Self::PlanarHead => ("planar-head", PLANAR_HEAD_GLB),
+        }
+    }
+
+    /// The real size of the largest side, metres, for models whose file
+    /// units are not metres. Figures are sized by the figure height instead.
+    fn real_size(self) -> Option<f32> {
+        match self {
+            Self::Male | Self::Female => None,
+            // Life-size heads on their stands.
+            Self::AsaroHead => Some(0.32),
+            Self::PlanarHead => Some(0.32),
+        }
+    }
+
+    /// Turn around the vertical axis so the model faces the front (+Z).
+    fn facing(self) -> f32 {
+        match self {
+            // The file looks along -X.
+            Self::AsaroHead => std::f32::consts::FRAC_PI_2,
+            _ => 0.0,
+        }
+    }
+
+    /// Message id of the button that adds the model.
+    fn add_message_id(self) -> &'static str {
+        match self {
+            Self::Male => "studio-add-male",
+            Self::Female => "studio-add-female",
+            Self::AsaroHead => "studio-add-asaro-head",
+            Self::PlanarHead => "studio-add-planar-head",
         }
     }
 
@@ -40,6 +77,8 @@ impl Builtin {
         match self {
             Self::Male => "model-male-figure",
             Self::Female => "model-female-figure",
+            Self::AsaroHead => "model-asaro-head",
+            Self::PlanarHead => "model-planar-head",
         }
     }
 }
@@ -88,11 +127,16 @@ impl Studio {
 
     /// Places a new object of the model from `source`, loading the model
     /// only if the scene does not have it yet, and selects the object.
+    /// `real_size` (largest side, metres) is given to a newly loaded model
+    /// before the object is placed, and `transform` sets the new object's
+    /// rotation and size, so placement uses the object's real extent.
     fn add_object_from(
         &mut self,
         source: String,
         load: impl FnOnce() -> Result<Model, LoadError>,
-    ) -> Result<(), LoadError> {
+        real_size: Option<f32>,
+        transform: Transform,
+    ) -> Result<ModelId, LoadError> {
         let known = self
             .sources
             .get(&source)
@@ -102,21 +146,29 @@ impl Studio {
             Some(id) => id,
             None => {
                 let id = self.scene.add_model(load()?);
+                if let Some(size) = real_size {
+                    self.scene.set_real_size(id, size);
+                }
                 self.sources.insert(source, id);
                 id
             }
         };
-        let object = self.scene.add_object(model_id);
+        let object = self.scene.add_object_with(model_id, transform);
         self.scene.select(object);
         self.pending_frame = Some(FrameTarget::Scene);
         self.message = None;
-        Ok(())
+        Ok(model_id)
     }
 
     fn add_builtin(&mut self, builtin: Builtin) {
         let (name, bytes) = builtin.name_and_bytes();
+        let facing = Transform {
+            rotation: glam::Vec3::new(0.0, builtin.facing(), 0.0),
+            ..Transform::default()
+        };
+        let load = || Model::from_gltf_slice(name, bytes);
         if let Err(error) =
-            self.add_object_from(builtin.source(), || Model::from_gltf_slice(name, bytes))
+            self.add_object_from(builtin.source(), load, builtin.real_size(), facing)
         {
             log::error!("built-in model {name} failed to load: {error}");
         }
@@ -124,7 +176,8 @@ impl Studio {
 
     fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
         let source = format!("file:{name}:{}", bytes.len());
-        if let Err(error) = self.add_object_from(source, || Model::from_gltf_slice(name, bytes)) {
+        let load = || Model::from_gltf_slice(name, bytes);
+        if let Err(error) = self.add_object_from(source, load, None, Transform::default()) {
             self.message = Some(tr.tr_args(
                 "error-load-failed",
                 &[
@@ -497,11 +550,10 @@ impl Studio {
     fn objects_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.strong(tr.tr("studio-objects"));
         ui.horizontal_wrapped(|ui| {
-            if ui.button(tr.tr("studio-add-male")).clicked() {
-                self.add_builtin(Builtin::Male);
-            }
-            if ui.button(tr.tr("studio-add-female")).clicked() {
-                self.add_builtin(Builtin::Female);
+            for builtin in Builtin::ALL {
+                if ui.button(tr.tr(builtin.add_message_id())).clicked() {
+                    self.add_builtin(builtin);
+                }
             }
         });
         ui.label(tr.tr("studio-drop-hint"));
@@ -901,6 +953,40 @@ fn extension(name: &str) -> String {
 mod tests {
     use super::*;
     use houdon_i18n::Language;
+
+    #[test]
+    fn built_in_models_load_at_their_real_size() {
+        for builtin in Builtin::ALL {
+            let mut studio = Studio::new();
+            studio.add_builtin(builtin);
+            let id = studio.scene.selected().expect("the new object is selected");
+            let object = studio.scene.object(id).unwrap();
+            let size = studio.scene.object_bounds(object).size();
+            match builtin.real_size() {
+                Some(real) => {
+                    assert!(!object.figure, "{builtin:?} is not a figure");
+                    assert!(
+                        (size.max_element() - real).abs() < 0.01,
+                        "{builtin:?}: {size}"
+                    );
+                }
+                None => assert!(object.figure, "{builtin:?} is a figure"),
+            }
+        }
+    }
+
+    #[test]
+    fn built_in_models_stand_right_next_to_the_others() {
+        let mut studio = Studio::new();
+        for builtin in [Builtin::AsaroHead, Builtin::PlanarHead, Builtin::Female] {
+            let before = studio.scene.bounds();
+            studio.add_builtin(builtin);
+            let id = studio.scene.selected().unwrap();
+            let added = studio.scene.object_bounds(studio.scene.object(id).unwrap());
+            let gap = added.min.x - before.max.x;
+            assert!((0.0..0.5).contains(&gap), "{builtin:?} stands {gap} m away");
+        }
+    }
 
     #[test]
     fn lengths_read_in_the_chosen_units_and_language() {
