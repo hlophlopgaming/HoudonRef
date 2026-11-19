@@ -80,6 +80,21 @@ Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms,
 
 Not tickets yet; to be grilled and specified when their time comes.
 
+### Drawing aids (proposed for before release where cheap)
+
+- **Value mode (notan):** reduce the picture to 2, 3, 4 or 5 tones (light, half-tone, shadow, accents), a grey mode that drops colour and keeps lightness, and a "squint" blur. Shows the big masses of light and shadow, as artists do by squinting.
+- **Compare with my drawing:** load a photo of the artist's drawing and lay it over the picture with transparency or as a difference, to see where proportions and angles drift.
+- **Grids and guides over the picture:** rule of thirds, proportional grid, plumb lines, horizon and vanishing points; measuring angles and ratios on screen, like sighting with a pencil.
+- **Mirror the picture** with one key, to see one's own errors afresh.
+
+### Studio and Atelier
+
+- **Basic forms:** sphere, cube, cylinder, cone and box as built-in models for exercises.
+- **Light as in life:** colour temperature in kelvins; the sun by time of day.
+- **Second screen:** open the same scene on a tablet or phone by a link or QR code and draw from it.
+- **Layers for painting:** export silhouette, shadows, light and contour lines as separate layers (ties in with the Krita bridge below).
+- **Study model library:** skulls, hands, feet, plaster casts and drapery; part of it comes with the Atlas.
+
 ### Blender and Krita bridge (desktop)
 
 - **Live link with Blender.** A Blender add-on sends scene changes to the Studio over a local connection: move a light or an object in Blender and the Studio picture follows.
