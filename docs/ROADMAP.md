@@ -75,3 +75,14 @@ Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms,
 
 - Web version: GitHub Pages, static only. User models are opened from the local disk in the browser.
 - `.blend`: no native parser. The format changes between Blender versions and modifiers and rigs need Blender itself to evaluate.
+
+## After release: ideas
+
+Not tickets yet; to be grilled and specified when their time comes.
+
+### Blender and Krita bridge (desktop)
+
+- **Live link with Blender.** A Blender add-on sends scene changes to the Studio over a local connection: move a light or an object in Blender and the Studio picture follows.
+- **Scene import from Blender.** Bring a whole Blender scene into the Studio: objects, their materials, lights and the camera (glTF with `KHR_lights_punctual` covers lights; the camera maps to a Camera preset). Builds on the desktop `.blend` import (ADR 0002).
+- **Krita docker.** A Krita plugin (Python) that shows the Studio picture in a docker next to the canvas and refreshes it live, so the reference sits inside the painting program. Possibly also sending render passes (lines, shadows, light) as Krita layers.
+- Open questions: one-way or two-way sync; which Blender and Krita versions; whether the Krita side is worth it once the Studio window can stay on top.
