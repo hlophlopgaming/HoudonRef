@@ -68,7 +68,12 @@ impl OffscreenRenderer {
 
     /// Uses an existing device, for example the app's own.
     pub fn from_device(device: wgpu::Device, queue: wgpu::Queue) -> Self {
-        let renderer = SceneRenderer::new(&device, COLOR_FORMAT, Some(DEPTH_FORMAT));
+        let renderer = SceneRenderer::new(
+            &device,
+            COLOR_FORMAT,
+            Some(DEPTH_FORMAT),
+            crate::DEFAULT_ATLAS_SIZE,
+        );
         Self {
             device,
             queue,

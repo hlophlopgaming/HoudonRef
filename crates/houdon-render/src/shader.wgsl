@@ -75,15 +75,18 @@ fn cube_face(v: vec3<f32>) -> u32 {
 // How much of the light reaches `world`, 0 to 1, from one shadow view.
 // 3 x 3 filtered depth comparisons soften the edge; the comparison sampler
 // becomes a sampler2DShadow on WebGL2.
-fn lit_fraction(view: u32, world: vec3<f32>, normal: vec3<f32>) -> f32 {
-    let clip = shadows.view_proj[view] * vec4<f32>(world + normal * NORMAL_OFFSET, 1.0);
+// `point` is the surface point already pushed off the surface.
+fn lit_fraction(view: u32, point: vec3<f32>) -> f32 {
+    let clip = shadows.view_proj[view] * vec4<f32>(point, 1.0);
     if clip.w <= 0.0 {
         return 1.0;
     }
     let ndc = clip.xyz / clip.w;
-    if abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z > 1.0 || ndc.z < 0.0 {
+    if abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z < 0.0 {
         return 1.0;
     }
+    // Beyond the far plane is behind every caster: still in their shadow.
+    let depth = min(ndc.z, 1.0);
     let tile = shadows.tiles[view];
     let texel = 1.0 / shadows.params.x;
     let uv = tile.xy + (ndc.xy * vec2<f32>(0.5, -0.5) + 0.5) * tile.z;
@@ -94,7 +97,7 @@ fn lit_fraction(view: u32, world: vec3<f32>, normal: vec3<f32>) -> f32 {
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
             let at = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, low, high);
-            lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, ndc.z);
+            lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, depth);
         }
     }
     return lit / 9.0;
@@ -144,12 +147,14 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
             }
         }
         if light.spot_inner.y >= 0.0 {
+            let point = in.world_position + n * NORMAL_OFFSET;
             var view = u32(light.spot_inner.y);
-            // A point light: positional and without a cone, six views.
+            // A point light: positional and without a cone, six views. The
+            // face is picked for the same point that is looked up.
             if light.position.w > 0.5 && light.spot.w < -1.5 {
-                view += cube_face(in.world_position - light.position.xyz);
+                view += cube_face(point - light.position.xyz);
             }
-            attenuation *= lit_fraction(view, in.world_position, n);
+            attenuation *= lit_fraction(view, point);
         }
         direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
     }

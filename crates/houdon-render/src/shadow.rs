@@ -15,10 +15,10 @@ use houdon_core::{Bounds, Light, LightKind, MAX_LIGHTS};
 
 use crate::Frame;
 
-/// Most light views: six per light when every light is a point light.
-pub const MAX_SHADOW_VIEWS: usize = MAX_LIGHTS * 6;
+/// Most light views: one per cube face when every light is a point light.
+pub const MAX_SHADOW_VIEWS: usize = MAX_LIGHTS * CUBE_FACES.len();
 
-/// Default side of the shadow atlas, texels.
+/// Default side of the shadow atlas, texels: the default shadow budget.
 pub const DEFAULT_ATLAS_SIZE: u32 = 2048;
 
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -70,7 +70,7 @@ pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<Mat4> {
         }
         LightKind::Point => {
             let position = light.position(centre);
-            let far = light.distance + radius * 2.0 + 10.0;
+            let far = reach(position, casters);
             let projection = directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, 0.05, far);
             CUBE_FACES
                 .iter()
@@ -78,6 +78,20 @@ pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<Mat4> {
                 .collect()
         }
     }
+}
+
+/// How far a light at `position` must see to cover every caster, with room
+/// for the shadows they cast beyond themselves.
+fn reach(position: Vec3, casters: &Bounds) -> f32 {
+    (casters.center() - position).length() + casters.radius() * 2.0 + 10.0
+}
+
+/// Where light view `index` sits in the atlas, in whole texels: the shadow
+/// pass draws there and the shader reads there, from this one function.
+pub fn tile_rect(index: u32, views: usize, atlas_size: u32) -> (u32, u32, u32) {
+    let grid = (views as f32).sqrt().ceil().max(1.0) as u32;
+    let size = atlas_size / grid;
+    ((index % grid) * size, (index / grid) * size, size)
 }
 
 /// Shadow data for the scene shader.
@@ -117,19 +131,13 @@ impl ShadowLayout {
         Self { first_view, views }
     }
 
-    /// Tiles per row and column for the current number of views.
-    pub fn grid(&self) -> u32 {
-        (self.views.len() as f32).sqrt().ceil().max(1.0) as u32
-    }
-
     pub fn uniforms(&self, atlas_size: u32) -> ShadowUniforms {
         let mut uniforms = ShadowUniforms::zeroed();
-        let grid = self.grid();
-        let tile = 1.0 / grid as f32;
+        let texel = 1.0 / atlas_size as f32;
         for (i, view) in self.views.iter().enumerate().take(MAX_SHADOW_VIEWS) {
             uniforms.view_proj[i] = view.to_cols_array_2d();
-            let (column, row) = (i as u32 % grid, i as u32 / grid);
-            uniforms.tiles[i] = [column as f32 * tile, row as f32 * tile, tile, 0.0];
+            let (x, y, size) = tile_rect(i as u32, self.views.len(), atlas_size);
+            uniforms.tiles[i] = [x as f32 * texel, y as f32 * texel, size as f32 * texel, 0.0];
         }
         uniforms.params = [atlas_size as f32, 0.0, 0.0, 0.0];
         uniforms
@@ -189,8 +197,13 @@ pub struct ShadowResources {
 }
 
 impl ShadowResources {
-    pub fn new(device: &wgpu::Device, object_layout: &wgpu::BindGroupLayout) -> Self {
-        let atlas_size = DEFAULT_ATLAS_SIZE.min(device.limits().max_texture_dimension_2d);
+    /// `atlas_size` is the shadow budget: the side of the atlas in texels.
+    pub fn new(
+        device: &wgpu::Device,
+        object_layout: &wgpu::BindGroupLayout,
+        atlas_size: u32,
+    ) -> Self {
+        let atlas_size = atlas_size.min(device.limits().max_texture_dimension_2d);
         let atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("houdon_shadow_atlas"),
             size: wgpu::Extent3d {
@@ -415,24 +428,37 @@ impl ShadowResources {
             ..Default::default()
         });
         pass.set_pipeline(&self.pipeline);
-        let grid = layout.grid();
-        let tile = self.atlas_size / grid;
         for i in 0..layout.views.len().min(MAX_SHADOW_VIEWS) as u32 {
-            let (column, row) = (i % grid, i / grid);
-            pass.set_viewport(
-                (column * tile) as f32,
-                (row * tile) as f32,
-                tile as f32,
-                tile as f32,
-                0.0,
-                1.0,
-            );
+            let (x, y, size) = tile_rect(i, layout.views.len(), self.atlas_size);
+            pass.set_viewport(x as f32, y as f32, size as f32, size as f32, 0.0, 1.0);
             pass.set_bind_group(
                 0,
                 &self.view_bind_group,
                 &[(u64::from(i) * self.view_stride) as u32],
             );
             draw_casters(&mut pass);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiles_never_overlap_and_stay_in_the_atlas() {
+        for views in [1, 6, 7, 16, 37, MAX_SHADOW_VIEWS] {
+            let tiles: Vec<_> = (0..views as u32)
+                .map(|i| tile_rect(i, views, DEFAULT_ATLAS_SIZE))
+                .collect();
+            for (i, &(x, y, size)) in tiles.iter().enumerate() {
+                assert!(
+                    size > 0 && x + size <= DEFAULT_ATLAS_SIZE && y + size <= DEFAULT_ATLAS_SIZE
+                );
+                for &(ox, oy, _) in &tiles[i + 1..] {
+                    assert!(ox >= x + size || oy >= y + size || ox + size <= x || oy + size <= y);
+                }
+            }
         }
     }
 }

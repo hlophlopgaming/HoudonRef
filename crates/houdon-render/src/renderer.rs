@@ -133,6 +133,7 @@ impl SceneRenderer {
             &render_state.device,
             render_state.target_format,
             depth_format,
+            crate::DEFAULT_ATLAS_SIZE,
         );
         render_state
             .renderer
@@ -141,10 +142,13 @@ impl SceneRenderer {
             .insert(renderer);
     }
 
+    /// `shadow_atlas_size` is the shadow budget shared by all lights, the
+    /// side of the shadow atlas in texels.
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         depth_format: Option<wgpu::TextureFormat>,
+        shadow_atlas_size: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("houdon_scene_shader"),
@@ -160,7 +164,7 @@ impl SceneRenderer {
             true,
         );
 
-        let shadows = ShadowResources::new(device, &object_layout);
+        let shadows = ShadowResources::new(device, &object_layout, shadow_atlas_size);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("houdon_scene_pipeline_layout"),
             bind_group_layouts: &[
