@@ -10,7 +10,7 @@ use houdon_core::{
     ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
-use houdon_render::{Frame, ViewportCallback};
+use houdon_render::{AntiAliasing, Frame, ViewportCallback};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -107,6 +107,8 @@ pub struct Studio {
     incoming: Arc<Mutex<Vec<FileResult>>>,
     /// How lengths are shown; an app setting, not part of the scene.
     units: UnitSystem,
+    /// How the viewport smooths edges; an app setting.
+    anti_aliasing: AntiAliasing,
 }
 
 impl Studio {
@@ -119,6 +121,7 @@ impl Studio {
             message: None,
             incoming: Arc::default(),
             units: UnitSystem::default(),
+            anti_aliasing: AntiAliasing::VIEWPORT,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -234,8 +237,13 @@ impl Studio {
     }
 
     /// Applies the app settings that affect the Studio.
-    pub fn apply_settings(&mut self, units: UnitSystem, figure_height: f32) {
+    pub fn apply_settings(&mut self, units: UnitSystem, figure_height: f32, smooth_edges: bool) {
         self.units = units;
+        self.anti_aliasing = if smooth_edges {
+            AntiAliasing::VIEWPORT
+        } else {
+            AntiAliasing::OFF
+        };
         self.scene.set_figure_height(figure_height);
     }
 
@@ -872,6 +880,7 @@ impl Studio {
             ViewportCallback {
                 frame: Frame::from_scene(&self.scene, aspect),
                 size: physical_size(rect, ui.ctx().pixels_per_point()),
+                anti_aliasing: self.anti_aliasing,
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);

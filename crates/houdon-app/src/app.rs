@@ -37,6 +37,8 @@ struct Settings {
     units: Option<String>,
     /// Height Figures are shown at, metres.
     figure_height: Option<f32>,
+    /// Smooth edges in the viewport; on unless turned off.
+    anti_aliasing: Option<bool>,
 }
 
 fn units_code(units: UnitSystem) -> &'static str {
@@ -64,6 +66,7 @@ pub struct HoudonApp {
     studio: Studio,
     units: UnitSystem,
     figure_height: f32,
+    anti_aliasing: bool,
     settings_open: bool,
 }
 
@@ -102,6 +105,7 @@ impl HoudonApp {
             studio: Studio::new(),
             units,
             figure_height,
+            anti_aliasing: settings.anti_aliasing.unwrap_or(true),
             settings_open: false,
         }
     }
@@ -123,6 +127,9 @@ impl HoudonApp {
                     length_field(ui, tr, self.units, &mut self.figure_height, FIGURE_HEIGHTS);
                     ui.label(tr.tr("settings-figure-height"));
                 });
+                ui.separator();
+                ui.checkbox(&mut self.anti_aliasing, tr.tr("settings-anti-aliasing"));
+                ui.weak(tr.tr("settings-anti-aliasing-hint"));
             });
         self.settings_open = open;
     }
@@ -159,7 +166,8 @@ impl HoudonApp {
 impl eframe::App for HoudonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.studio.poll_file_loads(ui.ctx(), &self.localizer);
-        self.studio.apply_settings(self.units, self.figure_height);
+        self.studio
+            .apply_settings(self.units, self.figure_height, self.anti_aliasing);
 
         egui::Panel::top("top_bar").show(ui, |ui| {
             ui.add_space(4.0);
@@ -183,6 +191,7 @@ impl eframe::App for HoudonApp {
             section: self.section,
             units: Some(units_code(self.units).to_owned()),
             figure_height: Some(self.figure_height),
+            anti_aliasing: Some(self.anti_aliasing),
         };
         eframe::set_value(storage, SETTINGS_KEY, &settings);
     }

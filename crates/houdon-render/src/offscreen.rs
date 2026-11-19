@@ -2,7 +2,7 @@
 
 use egui_wgpu::wgpu;
 
-use crate::{Frame, SceneRenderer};
+use crate::{AntiAliasing, Frame, SceneRenderer};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -86,8 +86,20 @@ impl OffscreenRenderer {
         self.renderer.shadow_map_builds()
     }
 
-    /// Renders `frame` into a `width` × `height` picture.
+    /// Renders `frame` into a `width` × `height` picture with the
+    /// anti-aliasing of exported pictures.
     pub fn render(&mut self, frame: &Frame, width: u32, height: u32) -> Image {
+        self.render_with(frame, width, height, AntiAliasing::EXPORT)
+    }
+
+    /// Renders `frame` into a `width` × `height` picture.
+    pub fn render_with(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        anti_aliasing: AntiAliasing,
+    ) -> Image {
         let size = wgpu::Extent3d {
             width,
             height,
@@ -116,6 +128,7 @@ impl OffscreenRenderer {
             &mut encoder,
             frame,
             [width, height],
+            anti_aliasing,
         );
         {
             // The composite covers every pixel; the clear only sets a start.

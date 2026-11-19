@@ -9,6 +9,42 @@ use houdon_core::{ValueMode, ValueStudy};
 /// Depth buffer of the scene's own picture.
 pub const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
+/// How edges are smoothed. `samples` is the multisampling of the scene
+/// pass (1 or 4, both on the base render tier); `supersample` draws the
+/// scene at that many times the output size per side and averages it down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AntiAliasing {
+    pub samples: u32,
+    pub supersample: u32,
+}
+
+impl AntiAliasing {
+    /// Jagged edges, the cheapest picture.
+    pub const OFF: Self = Self {
+        samples: 1,
+        supersample: 1,
+    };
+    /// The viewport: 4× MSAA.
+    pub const VIEWPORT: Self = Self {
+        samples: 4,
+        supersample: 1,
+    };
+    /// Exported pictures: 4× MSAA over a picture twice the size per side.
+    pub const EXPORT: Self = Self {
+        samples: 4,
+        supersample: 2,
+    };
+
+    /// The supported settings nearest to these: 1 or 4 samples and a
+    /// supersampling of 1 or 2.
+    pub fn normalized(self) -> Self {
+        Self {
+            samples: if self.samples > 1 { 4 } else { 1 },
+            supersample: self.supersample.clamp(1, 2),
+        }
+    }
+}
+
 /// The squint radius at full strength, as a share of the picture height.
 const SQUINT_SHARE: f32 = 0.03;
 
@@ -21,10 +57,25 @@ struct ValueUniforms {
 
 /// The scene's picture and depth at the current size.
 pub struct SceneTarget {
+    /// The picture's size: the output's times the supersampling.
     pub size: [u32; 2],
-    pub color_view: wgpu::TextureView,
+    pub samples: u32,
+    /// The single-sampled picture the composite reads.
+    color_view: wgpu::TextureView,
+    /// The multisampled picture drawn into and resolved into `color_view`.
+    msaa_view: Option<wgpu::TextureView>,
     pub depth_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
+}
+
+impl SceneTarget {
+    /// The view to draw the scene into and the one it resolves to, if any.
+    pub fn color_attachment(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.msaa_view {
+            Some(msaa) => (msaa, Some(&self.color_view)),
+            None => (&self.color_view, None),
+        }
+    }
 }
 
 pub struct Composite {
@@ -140,17 +191,26 @@ impl Composite {
         }
     }
 
-    /// Makes sure the scene picture has `size` and writes the value study.
+    /// Makes sure the scene picture fits an output of `output_size` with
+    /// `anti_aliasing`, and writes the value study.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        size: [u32; 2],
+        output_size: [u32; 2],
+        anti_aliasing: AntiAliasing,
         value: &ValueStudy,
     ) {
-        let size = [size[0].max(1), size[1].max(1)];
-        if self.target.as_ref().is_none_or(|t| t.size != size) {
-            self.target = Some(self.create_target(device, size));
+        let max = device.limits().max_texture_dimension_2d;
+        let scale = anti_aliasing.supersample;
+        let size = output_size.map(|side| (side.max(1) * scale).min(max));
+        let samples = anti_aliasing.samples;
+        if self
+            .target
+            .as_ref()
+            .is_none_or(|t| t.size != size || t.samples != samples)
+        {
+            self.target = Some(self.create_target(device, size, samples));
         }
         let (mode, tones) = match value.mode {
             ValueMode::Off => (0.0, 0.0),
@@ -182,19 +242,19 @@ impl Composite {
         }
     }
 
-    fn create_target(&self, device: &wgpu::Device, size: [u32; 2]) -> SceneTarget {
+    fn create_target(&self, device: &wgpu::Device, size: [u32; 2], samples: u32) -> SceneTarget {
         let extent = wgpu::Extent3d {
             width: size[0],
             height: size[1],
             depth_or_array_layers: 1,
         };
-        let texture = |label, format, usage| {
+        let texture = |label, format, usage, sample_count| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
                     size: extent,
                     mip_level_count: 1,
-                    sample_count: 1,
+                    sample_count,
                     dimension: wgpu::TextureDimension::D2,
                     format,
                     usage,
@@ -206,11 +266,21 @@ impl Composite {
             "houdon_scene_picture",
             self.color_format,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            1,
         );
+        let msaa_view = (samples > 1).then(|| {
+            texture(
+                "houdon_scene_picture_msaa",
+                self.color_format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+                samples,
+            )
+        });
         let depth_view = texture(
             "houdon_scene_depth",
             SCENE_DEPTH_FORMAT,
             wgpu::TextureUsages::RENDER_ATTACHMENT,
+            samples,
         );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("houdon_composite_bind_group"),
@@ -232,7 +302,9 @@ impl Composite {
         });
         SceneTarget {
             size,
+            samples,
             color_view,
+            msaa_view,
             depth_view,
             bind_group,
         }
