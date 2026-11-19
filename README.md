@@ -4,7 +4,7 @@
 
 <p align="center">Open-source tool for artists: an anatomy atlas, a 3D reference studio and a timed drawing atelier.</p>
 
-> Status: early planning. Nothing to run yet.
+> Status: early development. The Studio can show a glTF model under adjustable light; Atlas and Atelier are not started. See the [roadmap](docs/ROADMAP.md).
 
 Code licence: [GPL-3.0](LICENSE). Logo and third-party content keep their own licences (see Credits).
 
@@ -25,8 +25,32 @@ HoudonRef helps artists learn form, light and anatomy by drawing from 3D models.
 - Rust + `wgpu` + `egui`.
 - Open data: series, light presets and rooms are plain files (glTF + RON).
 
+## Building
+
+Requires a recent stable Rust toolchain.
+
+Desktop:
+
+```bash
+cargo run --release -p houdon-app
+```
+
+Web (needs [trunk](https://trunkrs.dev/) and the `wasm32-unknown-unknown` target):
+
+```bash
+cd crates/houdon-app && trunk serve --release
+```
+
+Tests:
+
+```bash
+cargo test --workspace
+```
+
 ## Credits
 
 - Name after Jean-Antoine Houdon, sculptor of the *Écorché* (1767).
 - Logo after *A kneeling écorché figure* by J. Gamelin (1778/79). Source image: [Wellcome Collection](https://wellcomecollection.org/works/gv249kuf), CC BY 4.0.
 - Planned anatomy data: [Écorché](https://github.com/Charleeh/ecorche) and [Z-Anatomy](https://www.z-anatomy.com/), both CC BY-SA 4.0. Anatomy content will ship as separate content packs under its own licence.
+- Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
+- Planned Studio content: matcaps from [Blender](https://github.com/blender/blender/tree/main/release/datafiles/studiolights/matcap) (CC0) and [Light Masks](https://kenney.nl/assets/light-masks) by Kenney (CC0).

@@ -1,0 +1,13 @@
+[package]
+name = "houdon-i18n"
+description = "User interface translations for HoudonRef (Fluent)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fluent-bundle.workspace = true
+unic-langid.workspace = true
+log.workspace = true

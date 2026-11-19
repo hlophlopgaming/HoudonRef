@@ -1,0 +1,14 @@
+[package]
+name = "houdon-core"
+description = "Scene data, model loading and camera math for HoudonRef"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+gltf.workspace = true
+thiserror.workspace = true
