@@ -89,6 +89,18 @@ color-clay = Глина
 color-random = Случайный
 studio-clay-tone = Тон глины
 
+studio-values = Тоны
+values-off = Выкл
+values-grey = Серый
+values-tones = { $count ->
+    [one] { $count } тон
+    [few] { $count } тона
+   *[many] { $count } тонов
+}
+values-balance = Баланс света и тени
+values-squint = Прищур
+values-hint = V во вьюпорте включает и выключает тональный разбор.
+
 studio-add-asaro-head = Добавить голову Асаро
 studio-add-planar-head = Добавить планарную голову
 model-asaro-head = голова Асаро

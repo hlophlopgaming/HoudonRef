@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use houdon_core::Transform;
 use houdon_core::{
     BuiltinRoom, ColorSource, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model,
-    ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
+    ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -327,7 +327,36 @@ impl Studio {
         ui.separator();
         self.color_section(ui, tr);
         ui.separator();
+        self.values_section(ui, tr);
+        ui.separator();
         self.room_section(ui, tr);
+    }
+
+    fn values_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-values"));
+        let study = &mut self.scene.shading.value;
+        let modes = [ValueMode::Off, ValueMode::Grey]
+            .into_iter()
+            .chain((ValueMode::MIN_TONES..=ValueMode::MAX_TONES).map(ValueMode::Tones));
+        ui.horizontal_wrapped(|ui| {
+            for mode in modes {
+                let label = match mode {
+                    ValueMode::Off => tr.tr("values-off"),
+                    ValueMode::Grey => tr.tr("values-grey"),
+                    ValueMode::Tones(n) => {
+                        tr.tr_args("values-tones", &[("count", i64::from(n).into())])
+                    }
+                };
+                if ui.selectable_label(study.mode == mode, label).clicked() {
+                    study.set_mode(mode);
+                }
+            }
+        });
+        if matches!(study.mode, ValueMode::Tones(_)) {
+            ui.add(egui::Slider::new(&mut study.balance, -1.0..=1.0).text(tr.tr("values-balance")));
+        }
+        ui.add(egui::Slider::new(&mut study.squint, 0.0..=1.0).text(tr.tr("values-squint")));
+        ui.weak(tr.tr("values-hint"));
     }
 
     fn color_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -830,6 +859,9 @@ impl Studio {
         {
             self.scene.remove_object(id);
         }
+        if response.hovered() && ui.input(|i| i.key_pressed(egui::Key::V)) {
+            self.scene.shading.value.toggle();
+        }
 
         let painter = ui.painter_at(rect);
         self.scene.keep_camera_above_floor();
@@ -839,10 +871,20 @@ impl Studio {
             rect,
             ViewportCallback {
                 frame: Frame::from_scene(&self.scene, aspect),
+                size: physical_size(rect, ui.ctx().pixels_per_point()),
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);
     }
+}
+
+/// The viewport's size in device pixels, as the GPU draws it.
+fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
+    let size = rect.size() * pixels_per_point;
+    [
+        size.x.round().max(1.0) as u32,
+        size.y.round().max(1.0) as u32,
+    ]
 }
 
 /// Message id of a colour source's name.

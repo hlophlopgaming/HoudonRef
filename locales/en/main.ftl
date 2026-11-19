@@ -89,6 +89,14 @@ color-clay = Clay
 color-random = Random
 studio-clay-tone = Clay tone
 
+studio-values = Values
+values-off = Off
+values-grey = Grey
+values-tones = { $count } tones
+values-balance = Light / shadow balance
+values-squint = Squint
+values-hint = V in the viewport turns the study on and off.
+
 studio-add-asaro-head = Add Asaro head
 studio-add-planar-head = Add planar head
 model-asaro-head = Asaro head
