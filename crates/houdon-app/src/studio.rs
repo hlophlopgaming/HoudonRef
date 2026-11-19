@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use houdon_core::Transform;
 use houdon_core::{
     BuiltinRoom, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
-    LightMask, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId, OrbitCamera,
-    PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
+    LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId,
+    OrbitCamera, PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
@@ -616,6 +616,12 @@ impl Studio {
             .on_disabled_hover_text(tr.tr("shading-render-later"));
         });
         cavity_controls(ui, tr, &mut shading.cavity);
+        line_controls(ui, tr, &mut shading.lines);
+        ui.checkbox(
+            &mut shading.backface_culling,
+            tr.tr("studio-backface-culling"),
+        )
+        .on_hover_text(tr.tr("backface-culling-hint"));
         if shading.mode != ShadingMode::Solid {
             return;
         }
@@ -1200,6 +1206,50 @@ fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
         size.x.round().max(1.0) as u32,
         size.y.round().max(1.0) as u32,
     ]
+}
+
+/// Contour lines and the wireframe.
+fn line_controls(ui: &mut egui::Ui, tr: &Localizer, lines: &mut Lines) {
+    let color_button = |ui: &mut egui::Ui, color: &mut glam::Vec3| {
+        let mut rgb = color.to_array();
+        if ui.color_edit_button_rgb(&mut rgb).changed() {
+            *color = glam::Vec3::from(rgb);
+        }
+    };
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut lines.contours, tr.tr("studio-contours"))
+            .on_hover_text(tr.tr("contours-hint"));
+        if lines.contours {
+            color_button(ui, &mut lines.color);
+        }
+    });
+    if lines.contours {
+        ui.indent("contours", |ui| {
+            ui.add(
+                egui::Slider::new(&mut lines.thickness, 1.0..=Lines::MAX_THICKNESS)
+                    .suffix(" px")
+                    .text(tr.tr("contours-thickness")),
+            );
+            ui.add(
+                egui::Slider::new(&mut lines.fold_sensitivity, 0.0..=1.0)
+                    .text(tr.tr("contours-folds")),
+            );
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut lines.wireframe, tr.tr("studio-wireframe"));
+        if lines.wireframe {
+            color_button(ui, &mut lines.wireframe_color);
+        }
+    });
+    if lines.wireframe {
+        ui.indent("wireframe", |ui| {
+            ui.add(
+                egui::Slider::new(&mut lines.wireframe_opacity, 0.0..=1.0)
+                    .text(tr.tr("wireframe-opacity")),
+            );
+        });
+    }
 }
 
 /// The cavity overlay's two kinds, each with its ridge and hollow strength.

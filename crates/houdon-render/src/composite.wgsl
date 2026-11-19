@@ -10,6 +10,11 @@ struct Value {
     // Screen-space cavity: x ridge and y hollow strength (0 when off);
     // z: texels per output pixel.
     cavity: vec4<f32>,
+    // Contour lines: x their half width in texels (0 when off); y how much
+    // the normal must turn for a fold line.
+    lines: vec4<f32>,
+    // rgb: line colour, linear.
+    line_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var picture: texture_2d<f32>;
@@ -77,6 +82,33 @@ fn screen_cavity(uv: vec2<f32>) -> f32 {
     return clamp(1.0 + 1.5 * (ridge - hollow), 0.3, 2.0);
 }
 
+// Whether a contour line passes here: an outline, where the surface
+// behind a neighbour is farther away (or there is none), or a fold, where
+// the normal turns sharply. Lines are drawn on the nearer surface.
+fn contour(uv: vec2<f32>) -> f32 {
+    if value.lines.x <= 0.0 {
+        return 0.0;
+    }
+    let size = vec2<f32>(textureDimensions(normals));
+    let centre = vec2<i32>(uv * size);
+    let reach = i32(max(round(value.lines.x), 1.0));
+    let here = surface_at(centre);
+    if here.z >= 0.999 {
+        return 0.0;
+    }
+    let right = surface_at(centre + vec2<i32>(reach, 0));
+    let left = surface_at(centre - vec2<i32>(reach, 0));
+    let up = surface_at(centre - vec2<i32>(0, reach));
+    let down = surface_at(centre + vec2<i32>(0, reach));
+    let gap = here.z * 0.05 + 1e-4;
+    let behind = max(max(right.z, left.z), max(up.z, down.z)) - here.z;
+    if behind > gap {
+        return 1.0;
+    }
+    let turn = length(right.xy - left.xy) + length(up.xy - down.xy);
+    return select(0.0, 1.0, turn > value.lines.y);
+}
+
 @fragment
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     // Squint: a Gaussian blur on a 5 x 5 grid scaled by the radius.
@@ -105,5 +137,6 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     } else if mode > 0.5 {
         result = vec3<f32>(lightness);
     }
+    result = mix(result, encode(value.line_color.rgb), contour(in.uv));
     return vec4<f32>(decode(result), 1.0);
 }

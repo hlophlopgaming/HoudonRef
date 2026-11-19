@@ -42,6 +42,8 @@ struct Globals {
     camera_up: [f32; 4],
     /// x, y: geometry cavity ridge and hollow strength (0 when it is off).
     cavity: [f32; 4],
+    /// rgb: wireframe colour, linear; a: its opacity.
+    wire: [f32; 4],
     lights: [GpuLight; MAX_LIGHTS],
 }
 
@@ -144,6 +146,9 @@ struct DrawEntry {
     material: Option<(ModelId, usize)>,
     one_sided: bool,
     casts_shadows: bool,
+    /// Draw the object's wireframe with this entry: its first part, never
+    /// the room.
+    wireframe: bool,
 }
 
 pub(crate) struct GpuMesh {
@@ -151,6 +156,9 @@ pub(crate) struct GpuMesh {
     /// One curvature per vertex, for the geometry cavity.
     curvature_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    /// Pairs of indices, one per edge, for the wireframe.
+    edge_buffer: wgpu::Buffer,
+    edge_index_count: u32,
 }
 
 /// GPU resources for drawing frames. One renders the viewport (stored in
@@ -166,6 +174,8 @@ pub struct SceneRenderer {
     globals_bind_group: wgpu::BindGroup,
     masks: MaskTextures,
     matcap: MatcapTexture,
+    /// Whether the last prepared frame draws wireframes.
+    wireframe: bool,
     object_layout: wgpu::BindGroupLayout,
     object_buffer: wgpu::Buffer,
     object_bind_group: wgpu::BindGroup,
@@ -266,6 +276,7 @@ impl SceneRenderer {
             globals_bind_group,
             masks,
             matcap,
+            wireframe: false,
             object_layout,
             object_buffer,
             object_bind_group,
@@ -314,7 +325,7 @@ impl SceneRenderer {
         let mut uniforms = Vec::new();
         for object in &frame.objects {
             let model = &object.model;
-            for part in &model.parts {
+            for (part_index, part) in model.parts.iter().enumerate() {
                 let material = match object.surface {
                     FrameSurface::Materials => part.material,
                     FrameSurface::Colors(_) => None,
@@ -351,8 +362,9 @@ impl SceneRenderer {
                     model_id: object.model_id,
                     part: *part,
                     material: material.map(|m| (object.model_id, m)),
-                    one_sided: object.one_sided,
+                    one_sided: object.one_sided || frame.backface_culling,
                     casts_shadows: object.casts_shadows,
+                    wireframe: part_index == 0 && !object.one_sided,
                 });
             }
         }
@@ -402,6 +414,11 @@ impl SceneRenderer {
             shading: [self.shade_code(device, queue, frame), 0.0, 0.0, 0.0],
             camera_right: frame.camera_right.extend(0.0).to_array(),
             camera_up: frame.camera_up.extend(0.0).to_array(),
+            wire: frame
+                .lines
+                .wireframe_color
+                .extend(frame.lines.wireframe_opacity.clamp(0.0, 1.0))
+                .to_array(),
             cavity: if frame.cavity.geometry {
                 [
                     frame.cavity.geometry_ridge,
@@ -445,14 +462,9 @@ impl SceneRenderer {
                 anti_aliasing.samples,
             );
         }
-        self.composite.prepare(
-            device,
-            queue,
-            size,
-            anti_aliasing,
-            &frame.value,
-            &frame.cavity,
-        );
+        self.wireframe = frame.lines.wireframe && frame.lines.wireframe_opacity > 0.0;
+        self.composite
+            .prepare(device, queue, size, anti_aliasing, frame);
         let Some(target) = &self.composite.target else {
             return;
         };
@@ -462,8 +474,12 @@ impl SceneRenderer {
         } else {
             frame.room.backdrop_color.to_array().map(f64::from)
         };
-        // Only the resolved pictures are read afterwards.
-        let attachment = |(view, resolve_target): (_, Option<_>), clear| {
+        // Only the resolved pictures are read afterwards. With a wireframe
+        // the colour is resolved after the wireframe pass instead, which
+        // draws over it and needs the scene's depth.
+        let wireframe = self.wireframe;
+        let attachment = |(view, resolve_target): (_, Option<_>), clear, resolve| {
+            let resolve_target = if resolve { resolve_target } else { None };
             Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
@@ -478,25 +494,62 @@ impl SceneRenderer {
                 },
             })
         };
+        let keep = if wireframe {
+            wgpu::StoreOp::Store
+        } else {
+            wgpu::StoreOp::Discard
+        };
         let [color, normals] = target.attachments();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("houdon_scene_pass"),
-            color_attachments: &[
-                attachment(color, wgpu::Color { r, g, b, a: 1.0 }),
-                // No surface: the farthest distance.
-                attachment(normals, wgpu::Color::WHITE),
-            ],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &target.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Discard,
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_scene_pass"),
+                color_attachments: &[
+                    attachment(color, wgpu::Color { r, g, b, a: 1.0 }, !wireframe),
+                    // No surface: the farthest distance.
+                    attachment(normals, wgpu::Color::WHITE, true),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: keep,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        self.draw_scene(&mut pass);
+                ..Default::default()
+            });
+            self.draw_scene(&mut pass);
+        }
+        if wireframe {
+            // Its own pass: WebGL2 cannot blend one target and not another.
+            let (view, resolve_target) = color;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_wireframe_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: if resolve_target.is_some() {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            self.draw_wireframe(&mut pass);
+        }
     }
 
     /// How `frame`'s surfaces are lit, uploading its matcap if it uses one.
@@ -548,6 +601,27 @@ impl SceneRenderer {
             render_pass.draw_indexed(part_range(&entry.part), 0, 0..1);
         }
     }
+
+    /// The edges of every object but the room, over the drawn scene.
+    fn draw_wireframe(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_pipeline(&self.pipelines.wireframe);
+        render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
+        render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
+        for (i, entry) in self.draw_list.iter().enumerate() {
+            let Some(mesh) = self.meshes.get(&entry.model_id) else {
+                continue;
+            };
+            if !entry.wireframe {
+                continue;
+            }
+            let offset = (i as u64 * self.object_stride) as u32;
+            render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
+            render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.edge_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..mesh.edge_index_count, 0, 0..1);
+        }
+    }
 }
 
 /// The index range of a part.
@@ -564,6 +638,8 @@ struct ScenePipelines {
     /// The room is drawn from inside only, so it can be seen through from
     /// outside.
     one_sided: wgpu::RenderPipeline,
+    /// The meshes' edges as lines over their surfaces.
+    wireframe: wgpu::RenderPipeline,
 }
 
 impl ScenePipelines {
@@ -589,8 +665,63 @@ impl ScenePipelines {
             samples,
             two_sided: pipeline(None, "houdon_scene_pipeline"),
             one_sided: pipeline(Some(wgpu::Face::Back), "houdon_one_sided_pipeline"),
+            wireframe: wireframe_pipeline(device, pipeline_layout, shader, target_format, samples),
         }
     }
+}
+
+fn wireframe_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("houdon_wireframe_pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_wire"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        // Seen where the surface is; the shader pulls lines a little
+        // towards the eye so they win over their own faces.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: SCENE_DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_wire"),
+            // Colour only: the surfaces under the lines stay as they are
+            // for the screen-space overlays.
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn scene_pipeline(
@@ -792,7 +923,14 @@ fn object_resources(
 }
 
 fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
+    let edges = edge_indices(&model.indices);
     GpuMesh {
+        edge_index_count: edges.len() as u32,
+        edge_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("houdon_mesh_edges"),
+            contents: bytemuck::cast_slice(&edges),
+            usage: wgpu::BufferUsages::INDEX,
+        }),
         vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("houdon_mesh_vertices"),
             contents: bytemuck::cast_slice(&model.vertices),
@@ -809,6 +947,24 @@ fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
             usage: wgpu::BufferUsages::INDEX,
         }),
     }
+}
+
+/// Each triangle edge once, as pairs of vertex indices.
+fn edge_indices(indices: &[u32]) -> Vec<u32> {
+    let mut seen = std::collections::HashSet::new();
+    let mut edges = Vec::new();
+    for tri in indices.as_chunks::<3>().0 {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            if seen.insert((a.min(b), a.max(b))) {
+                edges.extend([a, b]);
+            }
+        }
+    }
+    // An index buffer may not be empty.
+    if edges.is_empty() {
+        edges.extend([0, 0]);
+    }
+    edges
 }
 
 /// The Studio viewport for one egui frame.

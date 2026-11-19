@@ -4,7 +4,9 @@
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
-use houdon_core::{Cavity, ValueMode, ValueStudy};
+use houdon_core::{Lines, ValueMode};
+
+use crate::Frame;
 
 /// The scene's second picture: normals and distances as the camera sees
 /// them, for the screen-space cavity (see `FragmentOutput` in shader.wgsl).
@@ -58,6 +60,8 @@ struct ValueUniforms {
     params: [f32; 4],
     blur: [f32; 4],
     cavity: [f32; 4],
+    lines: [f32; 4],
+    line_color: [f32; 4],
 }
 
 /// The scene's picture and depth at the current size.
@@ -222,16 +226,17 @@ impl Composite {
     }
 
     /// Makes sure the scene picture fits an output of `output_size` with
-    /// `anti_aliasing`, and writes the value study.
+    /// `anti_aliasing`, and writes the settings of `frame`'s overlays: the value
+    /// study, the screen-space cavity and the contour lines.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         output_size: [u32; 2],
         anti_aliasing: AntiAliasing,
-        value: &ValueStudy,
-        cavity: &Cavity,
+        frame: &Frame,
     ) {
+        let (value, cavity, lines) = (&frame.value, &frame.cavity, &frame.lines);
         let max = device.limits().max_texture_dimension_2d;
         let scale = anti_aliasing.supersample;
         let size = output_size.map(|side| (side.max(1) * scale).min(max));
@@ -265,6 +270,19 @@ impl Composite {
             } else {
                 [0.0, 0.0, scale as f32, 0.0]
             },
+            lines: if lines.contours {
+                let thickness = lines.thickness.clamp(1.0, Lines::MAX_THICKNESS);
+                let sensitivity = lines.fold_sensitivity.clamp(0.0, 1.0);
+                [
+                    thickness * scale as f32 * 0.5,
+                    1.6 + (0.15 - 1.6) * sensitivity,
+                    0.0,
+                    0.0,
+                ]
+            } else {
+                [0.0; 4]
+            },
+            line_color: lines.color.extend(1.0).to_array(),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }

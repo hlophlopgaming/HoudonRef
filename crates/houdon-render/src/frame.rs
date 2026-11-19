@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use houdon_core::{
-    Cavity, Light, MatcapImage, Model, ModelId, Room, Scene, ShadingMode, SolidLighting, Surface,
-    ValueStudy,
+    Cavity, Light, Lines, MatcapImage, Model, ModelId, Room, Scene, ShadingMode, SolidLighting,
+    Surface, ValueStudy,
 };
 
 /// The surface colour of an object, linear RGB. It changes with height
@@ -85,6 +85,10 @@ pub struct Frame {
     pub camera_up: Vec3,
     /// The cavity overlay.
     pub cavity: Cavity,
+    /// Contour lines and wireframe.
+    pub lines: Lines,
+    /// Every object drawn from the side its normals face only.
+    pub backface_culling: bool,
 }
 
 impl Frame {
@@ -148,6 +152,8 @@ impl Frame {
             camera_right: view.row(0).truncate(),
             camera_up: view.row(1).truncate(),
             cavity: scene.shading.cavity,
+            lines: scene.shading.lines,
+            backface_culling: scene.shading.backface_culling,
         }
     }
 

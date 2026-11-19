@@ -52,6 +52,8 @@ struct Globals {
     camera_up: vec4<f32>,
     // x, y: geometry cavity ridge and hollow strength (0 when it is off).
     cavity: vec4<f32>,
+    // rgb: wireframe colour, linear; a: its opacity.
+    wire: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -443,4 +445,22 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
     return shaded(color, n, in.world_position);
+}
+
+// The wireframe: each mesh edge as a line, pulled a little towards the eye
+// so it is not hidden by the faces it borders.
+@vertex
+fn vs_wire(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    var clip = u.view_proj * object.model * vec4<f32>(position, 1.0);
+    clip.z -= 5e-5 * clip.w;
+    return clip;
+}
+
+@fragment
+fn fs_wire() -> @location(0) vec4<f32> {
+    var color = u.wire.rgb;
+    if u.params.y == 1u {
+        color = pow(color, vec3<f32>(1.0 / 2.2));
+    }
+    return vec4<f32>(color, u.wire.a);
 }

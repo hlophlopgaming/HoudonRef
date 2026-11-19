@@ -87,6 +87,41 @@ impl Default for Cavity {
     }
 }
 
+/// Line overlays for studying the drawing of a form, in Solid and Lit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lines {
+    /// Contour lines: silhouettes and the inner folds of a form.
+    pub contours: bool,
+    /// Line width, pixels.
+    pub thickness: f32,
+    /// Linear RGB.
+    pub color: Vec3,
+    /// 0 draws only outlines and the sharpest folds, 1 every soft fold.
+    pub fold_sensitivity: f32,
+    /// The mesh's edges, to see the planes of a planar model.
+    pub wireframe: bool,
+    pub wireframe_color: Vec3,
+    pub wireframe_opacity: f32,
+}
+
+impl Lines {
+    pub const MAX_THICKNESS: f32 = 4.0;
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            contours: false,
+            thickness: 1.0,
+            color: Vec3::ZERO,
+            fold_sensitivity: 0.3,
+            wireframe: false,
+            wireframe_color: Vec3::ZERO,
+            wireframe_opacity: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shading {
     pub mode: ShadingMode,
@@ -95,6 +130,11 @@ pub struct Shading {
     pub matcap: Option<Matcap>,
     /// Off by default.
     pub cavity: Cavity,
+    /// Off by default.
+    pub lines: Lines,
+    /// Hide the back of surfaces, as if every object were closed and seen
+    /// from outside. Off by default: imported meshes are often open.
+    pub backface_culling: bool,
     pub color: ColorSource,
     /// The Clay tone, linear RGB.
     pub clay_color: Vec3,
@@ -109,6 +149,8 @@ impl Default for Shading {
             solid: SolidLighting::default(),
             matcap: None,
             cavity: Cavity::default(),
+            lines: Lines::default(),
+            backface_culling: false,
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
             value: ValueStudy::default(),

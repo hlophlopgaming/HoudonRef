@@ -44,10 +44,11 @@ Done:
 - [x] Light masks: 152 Kenney masks (12 built in, the rest fetched on the web when chosen) and the artist's own images, on spot and directional lights (#13).
 - [x] Solid shading mode: Studio, Matcap and Flat light; the artist's own matcaps (#15, Blender's set still to add).
 - [x] Cavity, from the mesh and from the screen, in Solid and Lit (#16).
+- [x] Contour lines, wireframe and backface culling (#17).
 
 Next:
 
-- [ ] Blender's matcap set for the Solid mode (#15), contour lines and wireframe (#17).
+- [ ] Blender's matcap set for the Solid mode (#15).
 - [ ] Scene files (#11), presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
