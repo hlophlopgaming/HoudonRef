@@ -15,7 +15,8 @@ struct Light {
     // xyz: direction the spot points; w: cosine of the outer half angle,
     // or -2 for lights without a cone.
     spot: vec4<f32>,
-    // x: cosine of the inner half angle; y: first shadow view, or -1.
+    // x: cosine of the inner half angle; y: first shadow view, or -1;
+    // z: mask layer, or -1; w: a directional light's mask pattern size.
     spot_inner: vec4<f32>,
 };
 
@@ -62,6 +63,9 @@ struct ObjectUniforms {
 // y = roughness, z = 1 to use the material, w = normal map scale.
 
 @group(0) @binding(0) var<uniform> u: Globals;
+// One mask per light, white lets the light through.
+@group(0) @binding(1) var light_masks: texture_2d_array<f32>;
+@group(0) @binding(2) var light_mask_sampler: sampler;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
@@ -195,6 +199,44 @@ fn lit_fraction(view: u32, point: vec3<f32>, angle: f32) -> f32 {
     return lit / f32(SHADOW_TAPS);
 }
 
+// Two directions across `forward`, the same for every pixel, so a mask
+// keeps its orientation.
+fn across(forward: vec3<f32>) -> mat2x3<f32> {
+    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(forward.y) > 0.99);
+    let right = normalize(cross(forward, up));
+    return mat2x3<f32>(right, cross(right, forward));
+}
+
+// How much of `light` its mask lets through to `world`, 0 to 1. A spot
+// light stretches the mask over its cone; a directional light repeats it,
+// one copy per pattern size, like sun through a window frame.
+fn mask_through(light: Light, world: vec3<f32>) -> f32 {
+    let layer = light.spot_inner.z;
+    if layer < 0.0 {
+        return 1.0;
+    }
+    var uv: vec2<f32>;
+    if light.position.w > 0.5 {
+        let forward = light.spot.xyz;
+        let offset = world - light.position.xyz;
+        let ahead = dot(offset, forward);
+        if ahead <= 0.0 {
+            return 0.0;
+        }
+        let cos_outer = light.spot.w;
+        let tan_outer = sqrt(max(1.0 - cos_outer * cos_outer, 1e-6)) / cos_outer;
+        let side = across(forward);
+        let at = vec2<f32>(dot(offset, side[0]), dot(offset, side[1])) / (ahead * tan_outer);
+        // Half a texel in from the edge, so the repeating sampler never
+        // wraps around.
+        uv = clamp(at * vec2<f32>(0.5, -0.5) + 0.5, vec2<f32>(0.001), vec2<f32>(0.999));
+    } else {
+        let side = across(-light.position.xyz);
+        uv = vec2<f32>(dot(world, side[0]), -dot(world, side[1])) / light.spot_inner.w + 0.5;
+    }
+    return textureSampleLevel(light_masks, light_mask_sampler, uv, i32(layer), 0.0).r;
+}
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -295,6 +337,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
                 attenuation *= smoothstep(light.spot.w, light.spot_inner.x, cos_angle);
             }
         }
+        attenuation *= mask_through(light, in.world_position);
         if light.spot_inner.y >= 0.0 {
             let point = in.world_position + n * NORMAL_OFFSET;
             var view = u32(light.spot_inner.y);

@@ -8,6 +8,7 @@ use glam::Vec3;
 use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
 
 use crate::composite::{AntiAliasing, Composite, SCENE_DEPTH_FORMAT};
+use crate::light_mask::MaskTextures;
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
 use crate::{Frame, FrameSurface, ObjectColors};
@@ -40,6 +41,9 @@ const NO_CONE: f32 = -2.0;
 /// `spot_inner.y` of a light without shadows; otherwise its first shadow view.
 const NO_SHADOW: f32 = -1.0;
 
+/// `spot_inner.z` of a light without a mask; otherwise its mask layer.
+const NO_MASK: f32 = -1.0;
+
 /// One light as the shader sees it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -51,29 +55,40 @@ struct GpuLight {
     /// xyz: direction the spot points; w: cosine of the outer half angle,
     /// or -2 for lights without a cone.
     spot: [f32; 4],
-    /// x: cosine of the inner half angle; y: first shadow view, or -1.
+    /// x: cosine of the inner half angle; y: first shadow view, or -1;
+    /// z: mask layer, or -1; w: a directional light's mask pattern size.
     spot_inner: [f32; 4],
 }
 
 impl GpuLight {
-    fn new(light: &Light, centre: Vec3, first_shadow_view: Option<u32>) -> Self {
+    fn new(
+        light: &Light,
+        centre: Vec3,
+        first_shadow_view: Option<u32>,
+        mask_layer: Option<u32>,
+    ) -> Self {
         let shadow = first_shadow_view.map_or(NO_SHADOW, |v| v as f32);
+        let mask = mask_layer.map_or(NO_MASK, |layer| layer as f32);
+        let pattern = light
+            .mask
+            .as_ref()
+            .map_or(1.0, |m| m.pattern_size.max(0.01));
         let color = (light.color * light.intensity).extend(0.0).to_array();
         match light.kind {
             LightKind::Directional => Self {
                 position: light.direction().extend(0.0).to_array(),
                 color,
                 spot: [0.0, 0.0, 0.0, NO_CONE],
-                spot_inner: [0.0, shadow, 0.0, 0.0],
+                spot_inner: [0.0, shadow, mask, pattern],
             },
             LightKind::Point | LightKind::Spot => {
                 let position = light.position(centre);
                 let (spot, spot_inner) = if light.kind == LightKind::Spot {
                     let (outer, inner) = light.cone_cosines();
                     let aim = (centre - position).normalize_or(Vec3::NEG_Y);
-                    (aim.extend(outer).to_array(), [inner, shadow, 0.0, 0.0])
+                    (aim.extend(outer).to_array(), [inner, shadow, mask, pattern])
                 } else {
-                    ([0.0, 0.0, 0.0, NO_CONE], [0.0, shadow, 0.0, 0.0])
+                    ([0.0, 0.0, 0.0, NO_CONE], [0.0, shadow, NO_MASK, 0.0])
                 };
                 Self {
                     position: position.extend(1.0).to_array(),
@@ -130,6 +145,7 @@ pub struct SceneRenderer {
     pipelines: ScenePipelines,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
+    masks: MaskTextures,
     object_layout: wgpu::BindGroupLayout,
     object_buffer: wgpu::Buffer,
     object_bind_group: wgpu::BindGroup,
@@ -180,8 +196,8 @@ impl SceneRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let globals_layout =
-            uniform_layout(device, "houdon_globals_layout", size_of::<Globals>(), false);
+        let globals_layout = globals_layout(device);
+        let masks = MaskTextures::new(device);
         let object_layout = uniform_layout(
             device,
             "houdon_object_layout",
@@ -213,10 +229,20 @@ impl SceneRenderer {
         let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("houdon_globals_bind_group"),
             layout: &globals_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&masks.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&masks.sampler),
+                },
+            ],
         });
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
@@ -232,6 +258,7 @@ impl SceneRenderer {
             pipelines,
             globals_buffer,
             globals_bind_group,
+            masks,
             object_layout,
             object_buffer,
             object_bind_group,
@@ -344,14 +371,16 @@ impl SceneRenderer {
         self.draw_list = entries;
 
         let shadow_layout = ShadowLayout::new(frame);
+        let mask_layers = self.masks.prepare(queue, &frame.lights);
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
         let count = frame.lights.len().min(MAX_LIGHTS);
-        for ((slot, light), first_view) in lights
+        for (((slot, light), first_view), mask_layer) in lights
             .iter_mut()
             .zip(&frame.lights)
             .zip(&shadow_layout.first_view)
+            .zip(&mask_layers)
         {
-            *slot = GpuLight::new(light, frame.light_centre, *first_view);
+            *slot = GpuLight::new(light, frame.light_centre, *first_view, *mask_layer);
         }
         let room = &frame.room;
         let globals = Globals {
@@ -558,6 +587,41 @@ fn scene_pipeline(
         }),
         multiview_mask: None,
         cache: None,
+    })
+}
+
+/// Bind group 0: the frame's globals and the light masks.
+fn globals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("houdon_globals_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(size_of::<Globals>() as u64),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     })
 }
 

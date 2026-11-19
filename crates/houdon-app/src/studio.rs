@@ -6,11 +6,14 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
-    BuiltinRoom, ColorSource, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model,
-    ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem, ValueMode,
+    BuiltinRoom, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
+    LightMask, LoadError, MAX_LIGHTS, MaskImage, Model, ModelId, OrbitCamera, PLAUSIBLE_SIZE,
+    Scene, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
+
+use crate::masks::{self, MaskLibrary};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -131,6 +134,12 @@ pub struct Studio {
     units: UnitSystem,
     /// How the viewport smooths edges; an app setting.
     anti_aliasing: AntiAliasing,
+    /// Light mask images and the picker's state.
+    masks: MaskLibrary,
+    mask_picker_open: bool,
+    mask_category: masks::Category,
+    /// A mask chosen for a light while its image was still loading.
+    pending_mask: Option<(LightId, &'static str)>,
 }
 
 impl Studio {
@@ -144,6 +153,10 @@ impl Studio {
             incoming: Arc::default(),
             units: UnitSystem::default(),
             anti_aliasing: AntiAliasing::VIEWPORT,
+            masks: MaskLibrary::default(),
+            mask_picker_open: false,
+            mask_category: masks::Category::Windows,
+            pending_mask: None,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -200,6 +213,10 @@ impl Studio {
     }
 
     fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        if matches!(extension(name).as_str(), "png" | "jpg" | "jpeg") {
+            self.load_mask_file(name, bytes, tr);
+            return;
+        }
         let source = format!("file:{name}:{}", bytes.len());
         let load = || Model::from_gltf_slice(name, bytes);
         if let Err(error) = self.add_object_from(source, load, None, Transform::default()) {
@@ -219,7 +236,7 @@ impl Studio {
         for file in dropped {
             let name = file_name(file.path());
             match extension(&name).as_str() {
-                "glb" | "gltf" => {}
+                "glb" | "gltf" | "png" | "jpg" | "jpeg" => {}
                 "blend" => {
                     self.message = Some(tr.tr("error-blend-file"));
                     continue;
@@ -279,6 +296,121 @@ impl Studio {
             });
 
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, tr));
+
+        for name in self.masks.poll() {
+            if let Some((light, pending)) = self.pending_mask
+                && pending == name
+            {
+                self.pending_mask = None;
+                self.choose_mask(ui.ctx(), light, name);
+            }
+        }
+        if self.mask_picker_open {
+            self.mask_picker(&ui.ctx().clone(), tr);
+        }
+    }
+
+    /// The window to pick a light mask for the selected light.
+    fn mask_picker(&mut self, ctx: &egui::Context, tr: &Localizer) {
+        let mut open = true;
+        egui::Window::new(tr.tr("mask-picker"))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for category in masks::Category::ALL {
+                        ui.selectable_value(
+                            &mut self.mask_category,
+                            category,
+                            tr.tr(category.message_id()),
+                        );
+                    }
+                });
+                ui.separator();
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            let names = masks::ALL
+                                .iter()
+                                .filter(|name| masks::Category::of(name) == self.mask_category);
+                            for &name in names {
+                                let size = egui::vec2(64.0, 64.0);
+                                let response = match self.masks.thumbnail(ctx, name) {
+                                    Some(texture) => ui.add(egui::Button::image(
+                                        egui::Image::new(&texture).fit_to_exact_size(size),
+                                    )),
+                                    None if self.masks.failed(name) => ui.add_sized(
+                                        size,
+                                        egui::Button::new(tr.tr("mask-unavailable")),
+                                    ),
+                                    None => ui.add_sized(size, egui::Spinner::new()),
+                                };
+                                if response.on_hover_text(name).clicked() {
+                                    chosen = Some(name);
+                                }
+                            }
+                        });
+                    });
+                ui.separator();
+                ui.weak(tr.tr("mask-picker-hint"));
+                ui.weak(tr.tr("mask-credit"));
+                if let (Some(name), Some(light)) = (chosen, self.selected_light) {
+                    self.choose_mask(ctx, light, name);
+                }
+            });
+        self.mask_picker_open = open;
+    }
+
+    /// Gives `light` the built-in mask `name`, now or once it has loaded.
+    fn choose_mask(&mut self, ctx: &egui::Context, light: LightId, name: &'static str) {
+        match self.masks.image(ctx, name) {
+            Some(image) => self.set_mask(light, name.to_owned(), image),
+            None => self.pending_mask = Some((light, name)),
+        }
+    }
+
+    /// Puts a mask image on a light, keeping the pattern size it had.
+    fn set_mask(&mut self, id: LightId, name: String, image: Arc<MaskImage>) {
+        let Some(mut light) = self.scene.light(id).cloned() else {
+            return;
+        };
+        if !light.kind.takes_mask() {
+            return;
+        }
+        let pattern_size = light
+            .mask
+            .as_ref()
+            .map_or(DEFAULT_PATTERN_SIZE, |m| m.pattern_size);
+        light.mask = Some(LightMask {
+            pattern_size,
+            ..LightMask::new(name, image)
+        });
+        self.scene.set_light(light);
+    }
+
+    /// Uses a dropped image as the selected light's mask.
+    fn load_mask_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        let image = match MaskImage::decode(bytes) {
+            Ok(image) => Arc::new(image),
+            Err(error) => {
+                log::warn!("{name}: {error}");
+                self.message =
+                    Some(tr.tr_args("error-mask-unreadable", &[("name", name.to_owned().into())]));
+                return;
+            }
+        };
+        let light = self
+            .selected_light
+            .filter(|id| self.scene.light(*id).is_some_and(|l| l.kind.takes_mask()));
+        match light {
+            Some(id) => {
+                self.set_mask(id, name.to_owned(), image);
+                self.message = None;
+            }
+            None => self.message = Some(tr.tr("error-mask-needs-light")),
+        }
     }
 
     fn side_panel(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -587,6 +719,30 @@ impl Studio {
                 egui::Slider::new(&mut light.softness, 0.0..=1.0)
                     .text(tr.tr("studio-light-softness")),
             );
+        }
+
+        if light.kind.takes_mask() {
+            ui.horizontal(|ui| {
+                ui.label(tr.tr("studio-light-mask"));
+                let name = light
+                    .mask
+                    .as_ref()
+                    .map_or_else(|| tr.tr("studio-light-mask-none"), |m| m.name.clone());
+                if ui.button(name).clicked() {
+                    self.mask_picker_open = true;
+                }
+                if light.mask.is_some() && ui.button(tr.tr("studio-light-mask-remove")).clicked() {
+                    light.mask = None;
+                }
+            });
+            if light.kind == LightKind::Directional
+                && let Some(mask) = &mut light.mask
+            {
+                ui.horizontal(|ui| {
+                    length_field(ui, tr, self.units, &mut mask.pattern_size, 0.05..=50.0);
+                    ui.label(tr.tr("studio-light-mask-pattern"));
+                });
+            }
         }
 
         if remove {

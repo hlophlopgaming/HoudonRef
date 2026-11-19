@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod light;
+pub mod mask;
 pub mod model;
 pub mod room;
 pub mod scene;
@@ -13,6 +14,7 @@ pub mod units;
 
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
+pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
 pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
