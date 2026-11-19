@@ -25,6 +25,10 @@ struct Shadows {
     view_proj: array<mat4x4<f32>, MAX_SHADOW_VIEWS>,
     // xy: tile origin in atlas uv; z: tile size in uv.
     tiles: array<vec4<f32>, MAX_SHADOW_VIEWS>,
+    // x near, y far plane; z orthographic half width (> 0) or minus the
+    // tangent of half the field of view (< 0); w the light's size: radians
+    // across for a directional light, metres for the others.
+    lens: array<vec4<f32>, MAX_SHADOW_VIEWS>,
     // x: atlas size in texels.
     params: vec4<f32>,
 };
@@ -62,6 +66,8 @@ struct ObjectUniforms {
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
 @group(2) @binding(2) var shadow_sampler: sampler_comparison;
+// The same depths packed into RGBA8, read raw for the blocker search.
+@group(2) @binding(3) var shadow_depths: texture_2d<f32>;
 @group(3) @binding(0) var base_color_texture: texture_2d<f32>;
 @group(3) @binding(1) var metallic_roughness_texture: texture_2d<f32>;
 @group(3) @binding(2) var normal_texture: texture_2d<f32>;
@@ -83,11 +89,50 @@ fn cube_face(v: vec3<f32>) -> u32 {
     return select(5u, 4u, v.z > 0.0);
 }
 
-// How much of the light reaches `world`, 0 to 1, from one shadow view.
-// 3 x 3 filtered depth comparisons soften the edge; the comparison sampler
-// becomes a sampler2DShadow on WebGL2.
+// Samples of the soft shadow filter and of the search for casters.
+const SHADOW_TAPS: u32 = 24u;
+const BLOCKER_TAPS: u32 = 12u;
+const GOLDEN_ANGLE: f32 = 2.39996323;
+
+// A depth written by the shadow pass's fs_shadow.
+fn unpack_depth(packed: vec4<f32>) -> f32 {
+    return dot(packed, vec4<f32>(1.0, 1.0 / 255.0, 1.0 / 65025.0, 1.0 / 16581375.0));
+}
+
+// Distance from the light along its view, metres, of a depth in the view.
+fn view_distance(depth: f32, lens: vec4<f32>) -> f32 {
+    let near = lens.x;
+    let far = lens.y;
+    if lens.z > 0.0 {
+        return near + depth * (far - near);
+    }
+    return near * far / (far - depth * (far - near));
+}
+
+// Point `i` of `count` spread evenly over a unit disk (a Vogel spiral),
+// turned by `angle`.
+fn disk_point(i: u32, count: u32, angle: f32) -> vec2<f32> {
+    let r = sqrt((f32(i) + 0.5) / f32(count));
+    let a = f32(i) * GOLDEN_ANGLE + angle;
+    return vec2<f32>(cos(a), sin(a)) * r;
+}
+
+// A different angle for every pixel, so the few filter samples leave fine
+// noise instead of bands (interleaved gradient noise).
+fn pixel_angle(pixel: vec2<f32>) -> f32 {
+    return 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// How much of the light reaches `point`, 0 to 1, from one shadow view.
 // `point` is the surface point already pushed off the surface.
-fn lit_fraction(view: u32, point: vec3<f32>) -> f32 {
+//
+// Soft shadows as with a light of real size (percentage-closer soft
+// shadows): first find how far the casters around are from the light,
+// then filter the depth comparisons over the penumbra that gives. Close to
+// the caster the penumbra is narrow, farther away it widens. The comparison
+// sampler becomes a sampler2DShadow on WebGL2; raw depths come from the
+// packed colour atlas, as WebGL2 cannot read them from a depth texture.
+fn lit_fraction(view: u32, point: vec3<f32>, angle: f32) -> f32 {
     let clip = shadows.view_proj[view] * vec4<f32>(point, 1.0);
     if clip.w <= 0.0 {
         return 1.0;
@@ -99,19 +144,55 @@ fn lit_fraction(view: u32, point: vec3<f32>) -> f32 {
     // Beyond the far plane is behind every caster: still in their shadow.
     let depth = min(ndc.z, 1.0);
     let tile = shadows.tiles[view];
-    let texel = 1.0 / shadows.params.x;
+    let lens = shadows.lens[view];
+    let atlas_size = shadows.params.x;
+    let texel = 1.0 / atlas_size;
     let uv = tile.xy + (ndc.xy * vec2<f32>(0.5, -0.5) + 0.5) * tile.z;
     // Stay inside this view's tile, half a texel from its edge.
     let low = tile.xy + vec2<f32>(texel * 1.5);
     let high = tile.xy + vec2<f32>(tile.z - texel * 1.5);
-    var lit = 0.0;
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let at = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, low, high);
-            lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, depth);
+
+    let orthographic = lens.z > 0.0;
+    let receiver = view_distance(depth, lens);
+    // Metres the tile spans at the receiver, across.
+    let tile_width = select(2.0 * receiver * -lens.z, 2.0 * lens.z, orthographic);
+    let uv_per_metre = tile.z / tile_width;
+    let min_radius = texel * 1.5;
+    let max_radius = tile.z * 0.08;
+
+    // Casters that can hide part of the light from this point lie within
+    // the light's size around the line to it.
+    let reach = select(lens.w * 0.5, lens.w * 0.5 * receiver, orthographic);
+    let search = clamp(reach * uv_per_metre, min_radius * 2.0, max_radius);
+    let bias = 0.005 + receiver * 0.002;
+    var blockers = 0.0;
+    var blocker_sum = 0.0;
+    for (var i = 0u; i < BLOCKER_TAPS; i++) {
+        let at = clamp(uv + disk_point(i, BLOCKER_TAPS, angle) * search, low, high);
+        let raw = unpack_depth(textureLoad(shadow_depths, vec2<i32>(at * atlas_size), 0));
+        let distance = view_distance(min(raw, 1.0), lens);
+        if distance < receiver - bias {
+            blockers += 1.0;
+            blocker_sum += distance;
         }
     }
-    return lit / 9.0;
+    if blockers == 0.0 {
+        return 1.0;
+    }
+    let blocker = blocker_sum / blockers;
+    // The penumbra widens with the gap between caster and receiver: by the
+    // light's angle for a directional light, by its size over the caster's
+    // distance for the others.
+    let spread = select(lens.w / max(blocker, 1e-3), lens.w, orthographic);
+    let penumbra = (receiver - blocker) * spread * uv_per_metre;
+    let radius = clamp(penumbra * 0.5, min_radius, max_radius);
+
+    var lit = 0.0;
+    for (var i = 0u; i < SHADOW_TAPS; i++) {
+        let at = clamp(uv + disk_point(i, SHADOW_TAPS, angle) * radius, low, high);
+        lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, depth);
+    }
+    return lit / f32(SHADOW_TAPS);
 }
 
 struct VertexInput {
@@ -198,6 +279,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
 
     var direct = vec3<f32>(0.0);
+    let shadow_angle = pixel_angle(in.clip_position.xy);
     let count = min(u.params.x, MAX_LIGHTS);
     for (var i = 0u; i < count; i++) {
         let light = u.lights[i];
@@ -221,7 +303,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
             if light.position.w > 0.5 && light.spot.w < -1.5 {
                 view += cube_face(point - light.position.xyz);
             }
-            attenuation *= lit_fraction(view, point);
+            attenuation *= lit_fraction(view, point, shadow_angle);
         }
         let l = normalize(to_light);
         let n_dot_l = max(dot(n, l), 0.0);

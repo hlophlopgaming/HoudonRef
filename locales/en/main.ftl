@@ -84,6 +84,8 @@ studio-camera-direction = Direction
 studio-camera-height = Height
 studio-camera-distance = Distance
 studio-light-casts-shadows = Casts shadows
+studio-light-shadow-softness = Shadow softness
+studio-light-shadow-softness-hint = How big the light looks: 0 is a bare bulb or the sun with crisp shadows, 1 a large softbox. Shadows blur more the farther they fall from what casts them.
 
 studio-color-source = Colour
 color-material = Material

@@ -50,12 +50,24 @@ pub struct Light {
     pub cone_angle: f32,
     /// How soft a spot light's edge is: 0 hard, 1 fading from the centre.
     pub softness: f32,
+    /// How soft the light's shadows are, 0 to 1: the light's apparent size,
+    /// from a bare bulb or the sun (0) to a large softbox (1). Shadows blur
+    /// more the farther they fall from what casts them.
+    pub shadow_softness: f32,
 }
+
+/// The apparent size of a light at full shadow softness, radians across.
+pub const MAX_SHADOW_ANGLE: f32 = 0.35;
 
 /// Distance new point and spot lights are placed at, metres.
 pub const DEFAULT_LIGHT_DISTANCE: f32 = 3.0;
 
 impl Light {
+    /// The light's apparent size seen from the scene, radians across.
+    pub fn shadow_angle(&self) -> f32 {
+        self.shadow_softness.clamp(0.0, 1.0) * MAX_SHADOW_ANGLE
+    }
+
     /// A white light of `kind` in the classic three-quarter key position,
     /// as bright at the scene centre as the default key light.
     pub fn new(kind: LightKind) -> Self {
@@ -76,6 +88,7 @@ impl Light {
             distance,
             cone_angle: 40f32.to_radians(),
             softness: 0.3,
+            shadow_softness: 0.15,
         }
     }
 

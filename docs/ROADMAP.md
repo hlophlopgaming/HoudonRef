@@ -40,11 +40,11 @@ Done:
 - [x] Built-in reference heads: Asaro head, planar head, base head and Wolfsaro (canine) head.
 - [x] Value mode: 2 to 5 tones, grey and squint (#25).
 - [x] Anti-aliasing: 4× MSAA in the viewport, supersampled offscreen pictures (#23).
+- [x] Soft shadows: smooth edges and per-light shadow softness, sharp at the contact and softer with distance (#24).
 
 Next:
 
 - [ ] Light masks (#13), Solid mode with matcaps (#15), cavity (#16), contour lines and wireframe (#17).
-- [ ] Smooth shadow edges and per-light shadow softness (#24).
 - [ ] Scene files (#11), presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).

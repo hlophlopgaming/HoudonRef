@@ -84,6 +84,8 @@ studio-camera-direction = Направление
 studio-camera-height = Высота
 studio-camera-distance = Расстояние
 studio-light-casts-shadows = Отбрасывает тени
+studio-light-shadow-softness = Мягкость тени
+studio-light-shadow-softness-hint = Насколько большим выглядит источник: 0 — голая лампа или солнце с чёткими тенями, 1 — большой софтбокс. Чем дальше тень от предмета, тем сильнее она размывается.
 
 studio-color-source = Цвет
 color-material = Материалы
