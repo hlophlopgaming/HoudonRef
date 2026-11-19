@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
-use houdon_core::{ModelId, Vertex};
+use houdon_core::{Light, LightKind, MAX_LIGHTS, ModelId, Vertex};
 
 use crate::Frame;
 
@@ -20,11 +20,60 @@ const SELECTION_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.35];
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
-    light_dir: [f32; 4],
-    light_color: [f32; 4],
+    /// rgb: sky colour; a: ambient intensity.
     sky_color: [f32; 4],
+    /// rgb: ground colour.
     ground_color: [f32; 4],
+    /// rgb: surface albedo.
     base_color: [f32; 4],
+    /// x: number of lights; y: 1 if the output needs gamma encoding.
+    params: [u32; 4],
+    lights: [GpuLight; MAX_LIGHTS],
+}
+
+/// One light as the shader sees it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct GpuLight {
+    /// xyz: position (w = 1) or direction towards the light (w = 0).
+    position: [f32; 4],
+    /// rgb: colour times intensity.
+    color: [f32; 4],
+    /// xyz: direction the spot points; w: cosine of the outer half angle,
+    /// or -2 for lights without a cone.
+    spot: [f32; 4],
+    /// x: cosine of the inner half angle.
+    spot_inner: [f32; 4],
+}
+
+impl GpuLight {
+    fn new(light: &Light, centre: Vec3) -> Self {
+        let color = (light.color * light.intensity).extend(0.0).to_array();
+        match light.kind {
+            LightKind::Directional => Self {
+                position: light.direction().extend(0.0).to_array(),
+                color,
+                spot: [0.0, 0.0, 0.0, -2.0],
+                spot_inner: [0.0; 4],
+            },
+            LightKind::Point | LightKind::Spot => {
+                let position = light.position(centre);
+                let (spot, spot_inner) = if light.kind == LightKind::Spot {
+                    let (outer, inner) = light.cone_cosines();
+                    let aim = (centre - position).normalize_or(Vec3::NEG_Y);
+                    (aim.extend(outer).to_array(), [inner, 0.0, 0.0, 0.0])
+                } else {
+                    ([0.0, 0.0, 0.0, -2.0], [0.0; 4])
+                };
+                Self {
+                    position: position.extend(1.0).to_array(),
+                    color,
+                    spot,
+                    spot_inner,
+                }
+            }
+        }
+    }
 }
 
 #[repr(C)]
@@ -224,17 +273,19 @@ impl SceneRenderer {
         }
         self.draw_list = frame.objects.iter().map(|o| o.model_id).collect();
 
-        let l = &frame.lighting;
+        let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
+        let count = frame.lights.len().min(MAX_LIGHTS);
+        for (slot, light) in lights.iter_mut().zip(&frame.lights) {
+            *slot = GpuLight::new(light, frame.light_centre);
+        }
+        let ambient = &frame.ambient;
         let globals = Globals {
             view_proj: frame.view_proj.to_cols_array_2d(),
-            light_dir: l
-                .key_direction()
-                .extend(if self.gamma_encode { 1.0 } else { 0.0 })
-                .to_array(),
-            light_color: l.key_color.extend(l.key_intensity).to_array(),
-            sky_color: l.sky_color.extend(l.ambient_intensity).to_array(),
-            ground_color: l.ground_color.extend(0.0).to_array(),
+            sky_color: ambient.sky_color.extend(ambient.intensity).to_array(),
+            ground_color: ambient.ground_color.extend(0.0).to_array(),
             base_color: CLAY_COLOR.extend(1.0).to_array(),
+            params: [count as u32, u32::from(self.gamma_encode), 0, 0],
+            lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
     }

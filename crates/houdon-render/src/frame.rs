@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use glam::Mat4;
-use houdon_core::{Lighting, Model, ModelId, Scene};
+use glam::{Mat4, Vec3};
+use houdon_core::{Ambient, Light, Model, ModelId, Scene};
 
 /// One object to draw.
 #[derive(Clone)]
@@ -22,7 +22,11 @@ pub struct FrameObject {
 pub struct Frame {
     pub objects: Vec<FrameObject>,
     pub view_proj: Mat4,
-    pub lighting: Lighting,
+    /// Enabled lights only.
+    pub lights: Vec<Light>,
+    /// Where point and spot lights are placed around and spot lights aim.
+    pub light_centre: Vec3,
+    pub ambient: Ambient,
     /// Background colour, sRGB.
     pub background: [u8; 3],
 }
@@ -46,7 +50,14 @@ impl Frame {
         Self {
             objects,
             view_proj: scene.camera.view_projection(aspect),
-            lighting: scene.lighting,
+            lights: scene
+                .lights()
+                .iter()
+                .filter(|l| l.enabled)
+                .cloned()
+                .collect(),
+            light_centre: scene.light_centre(),
+            ambient: scene.ambient,
             background: scene.background,
         }
     }

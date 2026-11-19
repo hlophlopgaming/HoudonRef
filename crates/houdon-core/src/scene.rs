@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
 
+use crate::light::{Light, LightId, LightKind};
 use crate::model::DEFAULT_FIGURE_HEIGHT;
 use crate::{Bounds, Model, OrbitCamera};
 
@@ -88,43 +89,28 @@ struct ModelEntry {
 /// Sizes outside this range, in metres, are taken for wrong file units.
 pub const PLAUSIBLE_SIZE: std::ops::RangeInclusive<f32> = 0.01..=100.0;
 
-/// The light of the scene: one key light and ambient light, in linear colour.
-///
-/// This is the stage 0 light; stage 1a replaces it with a list of lights.
+/// Brightness of an added light relative to the key light.
+const NEW_LIGHT_FILL: f32 = 0.5;
+
+/// The most lights a scene can hold; the renderer's light array has this size.
+pub const MAX_LIGHTS: usize = 16;
+
+/// Light that comes from everywhere: a sky colour from above and a ground
+/// colour from below, in linear RGB.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Lighting {
-    /// Direction of the key light around the vertical axis, radians, 0 = front.
-    pub key_azimuth: f32,
-    /// Height of the key light above the horizon, radians.
-    pub key_elevation: f32,
-    pub key_color: Vec3,
-    pub key_intensity: f32,
+pub struct Ambient {
     pub sky_color: Vec3,
     pub ground_color: Vec3,
-    pub ambient_intensity: f32,
+    pub intensity: f32,
 }
 
-impl Default for Lighting {
+impl Default for Ambient {
     fn default() -> Self {
         Self {
-            // Classic three-quarter key from the upper left.
-            key_azimuth: (-45f32).to_radians(),
-            key_elevation: 45f32.to_radians(),
-            key_color: Vec3::ONE,
-            key_intensity: 1.0,
             sky_color: Vec3::new(0.85, 0.9, 1.0),
             ground_color: Vec3::new(0.35, 0.3, 0.25),
-            ambient_intensity: 0.15,
+            intensity: 0.15,
         }
-    }
-}
-
-impl Lighting {
-    /// Unit vector pointing towards the key light.
-    pub fn key_direction(&self) -> Vec3 {
-        let (sin_az, cos_az) = self.key_azimuth.sin_cos();
-        let (sin_el, cos_el) = self.key_elevation.sin_cos();
-        Vec3::new(cos_el * sin_az, sin_el, cos_el * cos_az)
     }
 }
 
@@ -137,10 +123,18 @@ pub struct Scene {
     figure_height: f32,
     next_object: u64,
     selected: Option<ObjectId>,
+    lights: Vec<Light>,
+    next_light: u64,
     pub camera: OrbitCamera,
-    pub lighting: Lighting,
+    pub ambient: Ambient,
     /// Background colour, sRGB.
     pub background: [u8; 3],
+}
+
+/// An angle in radians brought into -π..π.
+fn wrap_angle(radians: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    (radians + PI).rem_euclid(TAU) - PI
 }
 
 /// Distance along a ray to where it enters a box, or `None` if it misses.
@@ -170,8 +164,13 @@ impl Scene {
             next_object: 1,
             figure_height: DEFAULT_FIGURE_HEIGHT,
             selected: None,
+            lights: vec![Light {
+                id: LightId(1),
+                ..Light::new(LightKind::Directional)
+            }],
+            next_light: 2,
             camera: OrbitCamera::default(),
-            lighting: Lighting::default(),
+            ambient: Ambient::default(),
             background: [40, 40, 40],
         }
     }
@@ -414,6 +413,65 @@ impl Scene {
             .fold(Bounds::EMPTY, |acc, b| acc.extended(b.min).extended(b.max))
     }
 
+    pub fn lights(&self) -> &[Light] {
+        &self.lights
+    }
+
+    pub fn light(&self, id: LightId) -> Option<&Light> {
+        self.lights.iter().find(|l| l.id == id)
+    }
+
+    /// Adds a light of `kind` in the default key position. Returns `None`
+    /// when the scene already has [`MAX_LIGHTS`].
+    pub fn add_light(&mut self, kind: LightKind) -> Option<LightId> {
+        if self.lights.len() >= MAX_LIGHTS {
+            return None;
+        }
+        let id = LightId(self.next_light);
+        self.next_light += 1;
+        // Each new light is a dimmer fill, a third of the way round from
+        // the one before, so it does not sit on top of the others.
+        let mut light = Light {
+            id,
+            ..Light::new(kind)
+        };
+        let step = 2.0 * std::f32::consts::PI / 3.0;
+        light.azimuth = wrap_angle(light.azimuth + step * self.lights.len() as f32);
+        light.elevation = 25f32.to_radians();
+        light.intensity *= NEW_LIGHT_FILL;
+        self.lights.push(light);
+        Some(id)
+    }
+
+    /// Replaces the light with the same id. Returns `false` if there is none.
+    pub fn set_light(&mut self, light: Light) -> bool {
+        match self.lights.iter_mut().find(|l| l.id == light.id) {
+            Some(slot) => {
+                *slot = light;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Returns `false` if there is no such light.
+    pub fn remove_light(&mut self, id: LightId) -> bool {
+        let before = self.lights.len();
+        self.lights.retain(|l| l.id != id);
+        self.lights.len() != before
+    }
+
+    /// The point lights are placed around and spot lights aim at: the
+    /// centre of the objects, or the origin when there are none.
+    pub fn light_centre(&self) -> Vec3 {
+        let bounds = self.bounds();
+        if bounds.is_empty() {
+            Vec3::ZERO
+        } else {
+            bounds.center()
+        }
+    }
+
     /// Points the camera at the whole scene so it fits the view.
     pub fn frame_camera(&mut self, aspect: f32) {
         let bounds = self.bounds();
@@ -514,30 +572,6 @@ mod tests {
             .x = 2.0;
         let after = scene.bounds().center();
         assert!((after.x - before.x - 2.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn key_light_direction_follows_its_angles() {
-        let mut lighting = Lighting {
-            key_azimuth: 0.0,
-            key_elevation: 0.0,
-            ..Lighting::default()
-        };
-        assert!(
-            (lighting.key_direction() - Vec3::Z).length() < 1e-6,
-            "front"
-        );
-        lighting.key_elevation = std::f32::consts::FRAC_PI_2;
-        assert!(
-            (lighting.key_direction() - Vec3::Y).length() < 1e-6,
-            "above"
-        );
-        lighting.key_elevation = 0.0;
-        lighting.key_azimuth = std::f32::consts::FRAC_PI_2;
-        assert!(
-            (lighting.key_direction() - Vec3::X).length() < 1e-6,
-            "right"
-        );
     }
 
     #[test]
@@ -817,6 +851,76 @@ mod tests {
         let model = scene.add_model(tiny_figure);
         scene.add_object(model).unwrap();
         assert!(!scene.needs_real_size(model));
+    }
+
+    #[test]
+    fn a_new_scene_has_one_key_light() {
+        let scene = Scene::new();
+        let lights = scene.lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].kind, crate::LightKind::Directional);
+        assert!(lights[0].enabled);
+    }
+
+    #[test]
+    fn a_scene_holds_at_most_16_lights() {
+        let mut scene = Scene::new();
+        let added = (0..20)
+            .filter_map(|_| scene.add_light(crate::LightKind::Point))
+            .count();
+        assert_eq!(added, MAX_LIGHTS - 1);
+        assert_eq!(scene.lights().len(), MAX_LIGHTS);
+        assert_eq!(scene.add_light(crate::LightKind::Spot), None);
+    }
+
+    #[test]
+    fn a_new_light_does_not_sit_on_top_of_the_others() {
+        let mut scene = Scene::new();
+        for _ in 0..3 {
+            scene.add_light(crate::LightKind::Point).unwrap();
+        }
+        let lights = scene.lights();
+        for (i, a) in lights.iter().enumerate() {
+            for b in &lights[i + 1..] {
+                assert!(
+                    a.direction().dot(b.direction()) < 0.95,
+                    "lights {:?} and {:?} overlap",
+                    a.id,
+                    b.id
+                );
+            }
+        }
+        assert!(
+            lights
+                .iter()
+                .all(|l| l.azimuth.abs() <= std::f32::consts::PI + 1e-6),
+            "angles stay within ±180°"
+        );
+        let key = lights[0].intensity_at_centre();
+        assert!(
+            lights[1..].iter().all(|l| l.intensity_at_centre() < key),
+            "added lights are fills, dimmer than the key"
+        );
+    }
+
+    #[test]
+    fn lights_can_be_changed_and_removed() {
+        let mut scene = Scene::new();
+        let id = scene.add_light(crate::LightKind::Spot).unwrap();
+        let mut light = scene.light(id).unwrap().clone();
+        light.intensity = 42.0;
+        assert!(scene.set_light(light));
+        assert_eq!(scene.light(id).unwrap().intensity, 42.0);
+        assert!(scene.remove_light(id));
+        assert!(scene.light(id).is_none());
+        assert!(!scene.remove_light(id));
+    }
+
+    #[test]
+    fn lights_are_placed_around_the_scene_centre() {
+        let (scene, _, _, _) = two_figure_scene();
+        assert!((scene.light_centre() - scene.bounds().center()).length() < 1e-5);
+        assert_eq!(Scene::new().light_centre(), Vec3::ZERO);
     }
 
     #[test]

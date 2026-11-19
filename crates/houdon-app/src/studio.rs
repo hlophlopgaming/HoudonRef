@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use houdon_core::{
-    LengthUnit, LoadError, Model, ModelId, OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
+    LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model, ModelId, OrbitCamera,
+    PLAUSIBLE_SIZE, Scene, UnitSystem,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -60,6 +61,8 @@ pub struct Studio {
     /// same model again places another object of it instead of loading it twice.
     sources: HashMap<String, ModelId>,
     pending_frame: Option<FrameTarget>,
+    /// The light being edited in the side panel; editor state, not scene state.
+    selected_light: Option<LightId>,
     message: Option<String>,
     /// Files whose bytes arrive asynchronously (always on the web).
     incoming: Arc<Mutex<Vec<FileResult>>>,
@@ -73,6 +76,7 @@ impl Studio {
             scene: Scene::new(),
             sources: HashMap::new(),
             pending_frame: Some(FrameTarget::Scene),
+            selected_light: None,
             message: None,
             incoming: Arc::default(),
             units: UnitSystem::default(),
@@ -231,34 +235,167 @@ impl Studio {
         ui.weak(tr.tr("studio-camera-hint"));
 
         ui.separator();
-        ui.strong(tr.tr("studio-light"));
-        let lighting = &mut self.scene.lighting;
-        let mut azimuth = lighting.key_azimuth.to_degrees();
-        let mut elevation = lighting.key_elevation.to_degrees();
+        self.lights_section(ui, tr);
+        ui.separator();
         ui.add(
-            egui::Slider::new(&mut azimuth, -180.0..=180.0)
-                .suffix("°")
-                .text(tr.tr("studio-light-azimuth")),
-        );
-        ui.add(
-            egui::Slider::new(&mut elevation, -60.0..=90.0)
-                .suffix("°")
-                .text(tr.tr("studio-light-elevation")),
-        );
-        lighting.key_azimuth = azimuth.to_radians();
-        lighting.key_elevation = elevation.to_radians();
-        ui.add(
-            egui::Slider::new(&mut lighting.key_intensity, 0.0..=3.0)
-                .text(tr.tr("studio-light-intensity")),
-        );
-        ui.add(
-            egui::Slider::new(&mut lighting.ambient_intensity, 0.0..=1.0)
+            egui::Slider::new(&mut self.scene.ambient.intensity, 0.0..=1.0)
                 .text(tr.tr("studio-ambient")),
         );
         ui.horizontal(|ui| {
             ui.color_edit_button_srgb(&mut self.scene.background);
             ui.label(tr.tr("studio-background"));
         });
+    }
+
+    fn lights_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-lights"));
+        let can_add = self.scene.lights().len() < MAX_LIGHTS;
+        ui.horizontal_wrapped(|ui| {
+            for kind in LightKind::ALL {
+                let label = tr.tr_args(
+                    "studio-add-light",
+                    &[("kind", tr.tr(light_kind_message_id(kind)).into())],
+                );
+                if ui.add_enabled(can_add, egui::Button::new(label)).clicked() {
+                    self.selected_light = self.scene.add_light(kind);
+                }
+            }
+        });
+        if !can_add {
+            ui.weak(tr.tr_args("studio-lights-full", &[("count", MAX_LIGHTS.into())]));
+        }
+
+        // The list: an on/off box and a selectable name per light.
+        let mut toggled = None;
+        for (index, light) in self.scene.lights().iter().enumerate() {
+            ui.horizontal(|ui| {
+                let mut enabled = light.enabled;
+                if ui.checkbox(&mut enabled, "").changed() {
+                    toggled = Some((light.id, enabled));
+                }
+                let name = tr.tr_args(
+                    "studio-light-label",
+                    &[
+                        ("number", (index + 1).into()),
+                        ("kind", tr.tr(light_kind_message_id(light.kind)).into()),
+                    ],
+                );
+                if ui
+                    .selectable_label(self.selected_light == Some(light.id), name)
+                    .clicked()
+                {
+                    self.selected_light = Some(light.id);
+                }
+            });
+        }
+        if let Some((id, enabled)) = toggled
+            && let Some(light) = self.scene.light(id)
+        {
+            let light = Light {
+                enabled,
+                ..light.clone()
+            };
+            self.scene.set_light(light);
+        }
+
+        let Some(mut light) = self
+            .selected_light
+            .and_then(|id| self.scene.light(id))
+            .cloned()
+        else {
+            self.selected_light = None;
+            return;
+        };
+        let before = light.clone();
+        let mut remove = false;
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("light_kind")
+                .selected_text(tr.tr(light_kind_message_id(light.kind)))
+                .show_ui(ui, |ui| {
+                    for kind in LightKind::ALL {
+                        ui.selectable_value(
+                            &mut light.kind,
+                            kind,
+                            tr.tr(light_kind_message_id(kind)),
+                        );
+                    }
+                });
+            let mut color = light.color.to_array();
+            ui.color_edit_button_rgb(&mut color);
+            light.color = glam::Vec3::from(color);
+            remove = ui.button(tr.tr("studio-light-remove")).clicked();
+        });
+        if light.kind != before.kind {
+            // Keep the brightness at the scene centre when the falloff changes.
+            let squared = light.distance * light.distance;
+            match (before.kind.is_positional(), light.kind.is_positional()) {
+                (false, true) => light.intensity *= squared,
+                (true, false) => light.intensity /= squared,
+                _ => {}
+            }
+        }
+        let max_intensity = if light.kind.is_positional() {
+            200.0
+        } else {
+            5.0
+        };
+        ui.add(
+            egui::Slider::new(&mut light.intensity, 0.0..=max_intensity)
+                .logarithmic(light.kind.is_positional())
+                .text(tr.tr("studio-light-intensity")),
+        );
+        let mut azimuth = snap_to_zero(light.azimuth.to_degrees());
+        let mut elevation = snap_to_zero(light.elevation.to_degrees());
+        if ui
+            .add(
+                egui::Slider::new(&mut azimuth, -180.0..=180.0)
+                    .suffix("°")
+                    .text(tr.tr("studio-light-azimuth")),
+            )
+            .changed()
+        {
+            light.azimuth = azimuth.to_radians();
+        }
+        if ui
+            .add(
+                egui::Slider::new(&mut elevation, -89.0..=89.0)
+                    .suffix("°")
+                    .text(tr.tr("studio-light-elevation")),
+            )
+            .changed()
+        {
+            light.elevation = elevation.to_radians();
+        }
+        if light.kind.is_positional() {
+            ui.horizontal(|ui| {
+                length_field(ui, tr, self.units, &mut light.distance, 0.1..=100.0);
+                ui.label(tr.tr("studio-light-distance"));
+            });
+        }
+        if light.kind == LightKind::Spot {
+            let mut cone = light.cone_angle.to_degrees();
+            if ui
+                .add(
+                    egui::Slider::new(&mut cone, 1.0..=170.0)
+                        .suffix("°")
+                        .text(tr.tr("studio-light-cone")),
+                )
+                .changed()
+            {
+                light.cone_angle = cone.to_radians();
+            }
+            ui.add(
+                egui::Slider::new(&mut light.softness, 0.0..=1.0)
+                    .text(tr.tr("studio-light-softness")),
+            );
+        }
+
+        if remove {
+            self.scene.remove_light(light.id);
+            self.selected_light = None;
+        } else if light != before {
+            self.scene.set_light(light);
+        }
     }
 
     /// Name of a model for the interface: translated for built-in models,
@@ -424,6 +561,54 @@ impl Studio {
         }
     }
 
+    /// Draws where each light is: a dot in its colour for point and spot
+    /// lights, and for directional lights a dot far out in their direction
+    /// with a line towards the scene centre. The selected light is ringed.
+    fn paint_light_icons(&self, painter: &egui::Painter, rect: egui::Rect, aspect: f32) {
+        let view_proj = self.scene.camera.view_projection(aspect);
+        let to_screen = |world: glam::Vec3| -> Option<egui::Pos2> {
+            let clip = view_proj * world.extend(1.0);
+            if clip.w <= 1e-4 {
+                return None;
+            }
+            let ndc = clip.truncate() / clip.w;
+            Some(egui::pos2(
+                rect.left() + (ndc.x + 1.0) * 0.5 * rect.width(),
+                rect.top() + (1.0 - ndc.y) * 0.5 * rect.height(),
+            ))
+        };
+        let centre = self.scene.light_centre();
+        let reach = self.scene.bounds().radius().max(0.5) * 0.8;
+        for light in self.scene.lights() {
+            let position = if light.kind.is_positional() {
+                light.position(centre)
+            } else {
+                centre + light.direction() * reach
+            };
+            let Some(at) = to_screen(position) else {
+                continue;
+            };
+            let [r, g, b] = (light.color / light.color.max_element().max(1e-4) * 255.0)
+                .to_array()
+                .map(|c| c as u8);
+            let fill = if light.enabled {
+                egui::Color32::from_rgb(r, g, b)
+            } else {
+                egui::Color32::from_gray(90)
+            };
+            if light.kind == LightKind::Directional
+                && let Some(target) = to_screen(centre)
+            {
+                let towards = at + (target - at).normalized() * 18.0;
+                painter.line_segment([at, towards], egui::Stroke::new(1.5, fill));
+            }
+            painter.circle(at, 6.0, fill, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            if self.selected_light == Some(light.id) {
+                painter.circle_stroke(at, 9.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+            }
+        }
+    }
+
     /// Shows and edits the real size of a model not shown as a Figure, and
     /// warns when its file units look wrong.
     fn real_size_editor(&mut self, ui: &mut egui::Ui, tr: &Localizer, model: ModelId) {
@@ -522,6 +707,16 @@ impl Studio {
                 frame: Frame::from_scene(&self.scene, aspect),
             },
         ));
+        self.paint_light_icons(&painter, rect, aspect);
+    }
+}
+
+/// Message id of a light kind's name.
+fn light_kind_message_id(kind: LightKind) -> &'static str {
+    match kind {
+        LightKind::Directional => "light-directional",
+        LightKind::Point => "light-point",
+        LightKind::Spot => "light-spot",
     }
 }
 

@@ -4,11 +4,13 @@
 //! and reused by every section of the app (Atlas, Studio, Atelier).
 
 pub mod camera;
+pub mod light;
 pub mod model;
 pub mod scene;
 pub mod units;
 
 pub use camera::OrbitCamera;
+pub use light::{Light, LightId, LightKind};
 pub use model::{Bounds, LoadError, Model, Vertex};
-pub use scene::{Lighting, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform};
+pub use scene::{Ambient, MAX_LIGHTS, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform};
 pub use units::{Length, LengthUnit, UnitSystem};

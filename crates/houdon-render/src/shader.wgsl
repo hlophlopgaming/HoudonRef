@@ -1,19 +1,33 @@
-// Clay shader: one directional key light plus a sky/ground ambient term.
-// Kept within the WebGL2 feature level: no storage buffers, no compute.
+// Clay shader: up to 16 directional, point and spot lights plus a
+// sky/ground ambient term. Kept within the WebGL2 feature level: lights live
+// in a uniform array, no storage buffers, no compute.
+
+const MAX_LIGHTS: u32 = 16u;
+
+struct Light {
+    // xyz: position (w = 1) or direction towards the light (w = 0).
+    position: vec4<f32>,
+    // rgb: colour times intensity.
+    color: vec4<f32>,
+    // xyz: direction the spot points; w: cosine of the outer half angle,
+    // or -2 for lights without a cone.
+    spot: vec4<f32>,
+    // x: cosine of the inner half angle.
+    spot_inner: vec4<f32>,
+};
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    // xyz: direction towards the light (world space); w: 1 if the output
-    // needs gamma encoding in the shader (non-sRGB framebuffer).
-    light_dir: vec4<f32>,
-    // rgb: key light colour; a: intensity.
-    light_color: vec4<f32>,
     // rgb: sky colour; a: ambient intensity.
     sky_color: vec4<f32>,
     // rgb: ground colour.
     ground_color: vec4<f32>,
     // rgb: surface albedo.
     base_color: vec4<f32>,
+    // x: number of lights; y: 1 if the output needs gamma encoding in the
+    // shader (non-sRGB framebuffer).
+    params: vec4<u32>,
+    lights: array<Light, MAX_LIGHTS>,
 };
 
 struct ObjectUniforms {
@@ -35,12 +49,15 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
+    @location(1) world_position: vec3<f32>,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = u.view_proj * object.model * vec4<f32>(in.position, 1.0);
+    let world = object.model * vec4<f32>(in.position, 1.0);
+    out.clip_position = u.view_proj * world;
+    out.world_position = world.xyz;
     out.normal = (object.normal * vec4<f32>(in.normal, 0.0)).xyz;
     return out;
 }
@@ -51,12 +68,28 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     if !front_facing {
         n = -n;
     }
-    let l = normalize(u.light_dir.xyz);
-    let key = max(dot(n, l), 0.0) * u.light_color.rgb * u.light_color.a;
+    var direct = vec3<f32>(0.0);
+    let count = min(u.params.x, MAX_LIGHTS);
+    for (var i = 0u; i < count; i++) {
+        let light = u.lights[i];
+        var to_light = light.position.xyz;
+        var attenuation = 1.0;
+        if light.position.w > 0.5 {
+            let offset = light.position.xyz - in.world_position;
+            let distance_squared = max(dot(offset, offset), 1e-4);
+            to_light = offset * inverseSqrt(distance_squared);
+            attenuation = 1.0 / distance_squared;
+            if light.spot.w > -1.5 {
+                let cos_angle = dot(-to_light, light.spot.xyz);
+                attenuation *= smoothstep(light.spot.w, light.spot_inner.x, cos_angle);
+            }
+        }
+        direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
+    }
     let ambient = mix(u.ground_color.rgb, u.sky_color.rgb, n.y * 0.5 + 0.5) * u.sky_color.a;
-    var color = u.base_color.rgb * (key + ambient);
+    var color = u.base_color.rgb * (direct + ambient);
     color = mix(color, object.highlight.rgb, object.highlight.a);
-    if u.light_dir.w > 0.5 {
+    if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
     return vec4<f32>(color, 1.0);

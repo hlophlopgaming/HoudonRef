@@ -29,10 +29,9 @@ studio-drop-hint = Перетащите файл .glb или .gltf в окно, 
 studio-camera = Камера
 studio-focal-length = Фокусное расстояние
 
-studio-light = Свет
 studio-light-azimuth = Направление
 studio-light-elevation = Высота
-studio-light-intensity = Основной свет
+studio-light-intensity = Яркость
 studio-ambient = Заполняющий
 studio-background = Фон
 
@@ -60,3 +59,15 @@ unit-centimetre-short = см
 unit-inch-short = дюйм
 unit-foot-short = фут
 length = { $value } { $unit }
+
+studio-lights = Источники света
+studio-add-light = + { $kind }
+studio-lights-full = В сцене может быть не больше { $count } источников.
+studio-light-label = { $number }. { $kind }
+studio-light-remove = Удалить
+studio-light-distance = Расстояние
+studio-light-cone = Конус
+studio-light-softness = Мягкость края
+light-directional = Направленный
+light-point = Точечный
+light-spot = Прожектор

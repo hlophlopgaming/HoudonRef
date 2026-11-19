@@ -29,10 +29,9 @@ studio-drop-hint = Drop a .glb or .gltf file onto the window to add it.
 studio-camera = Camera
 studio-focal-length = Focal length
 
-studio-light = Light
 studio-light-azimuth = Direction
 studio-light-elevation = Height
-studio-light-intensity = Key light
+studio-light-intensity = Intensity
 studio-ambient = Ambient
 studio-background = Background
 
@@ -60,3 +59,15 @@ unit-centimetre-short = cm
 unit-inch-short = in
 unit-foot-short = ft
 length = { $value } { $unit }
+
+studio-lights = Lights
+studio-add-light = + { $kind }
+studio-lights-full = A scene holds up to { $count } lights.
+studio-light-label = { $number }. { $kind }
+studio-light-remove = Remove
+studio-light-distance = Distance
+studio-light-cone = Cone
+studio-light-softness = Edge softness
+light-directional = Directional
+light-point = Point
+light-spot = Spot
