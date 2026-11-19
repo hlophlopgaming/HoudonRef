@@ -1,18 +1,37 @@
 //! Renders scenes without a window and checks what an artist would see.
 
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
 use houdon_core::{Model, Scene, model::DEFAULT_FIGURE_HEIGHT};
 use houdon_render::{Frame, Image, OffscreenRenderer};
 
 const MALE: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const SIZE: u32 = 64;
 
-/// A renderer, or `None` with a note when this machine has no GPU adapter.
+/// The one renderer all tests share, like the app has one GPU device for
+/// its whole run. Tests take turns with it. Opening and dropping a device
+/// per test, from parallel test threads, once crashed Mesa's software
+/// Vulkan driver (lavapipe) on the CI runner.
+static RENDERER: OnceLock<Result<Mutex<OffscreenRenderer>, String>> = OnceLock::new();
+
+/// The shared renderer, or `None` with a note when this machine has no GPU
+/// adapter.
 ///
 /// CI sets `HOUDON_REQUIRE_GPU=1`, so there a missing adapter fails the test
 /// instead of silently skipping it.
-fn renderer() -> Option<OffscreenRenderer> {
-    match OffscreenRenderer::new_headless() {
-        Ok(renderer) => Some(renderer),
+fn renderer() -> Option<MutexGuard<'static, OffscreenRenderer>> {
+    let shared = RENDERER.get_or_init(|| {
+        OffscreenRenderer::new_headless()
+            .map(Mutex::new)
+            .map_err(|error| error.to_string())
+    });
+    match shared {
+        // A test that failed while holding the renderer leaves it usable.
+        Ok(renderer) => Some(
+            renderer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        ),
         Err(error) if std::env::var_os("HOUDON_REQUIRE_GPU").is_some() => {
             panic!("HOUDON_REQUIRE_GPU is set but no renderer is available: {error}")
         }
