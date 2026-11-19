@@ -105,6 +105,21 @@ mask-category-shapes = Пятна
 error-mask-needs-light = Чтобы сделать картинку маской света, сначала выберите прожектор или направленный свет, потом перетащите картинку.
 error-mask-unreadable = { $name } — не PNG или JPEG, или файл не читается.
 
+studio-shading = Затенение
+shading-solid = Solid
+shading-lit = Lit
+shading-render = Render
+shading-render-later = Появится в следующих версиях: качественный рендер на компьютере.
+solid-studio = Студия
+solid-matcap = Мэткап
+solid-flat = Плоский
+studio-matcap = Мэткап
+studio-matcap-none = Нет (выберите)
+matcap-picker = Мэткапы
+matcap-picker-hint = Щёлкните мэткап, чтобы выбрать его. Пока это окно открыто, перетащите в окно EXR, PNG или JPG, чтобы взять свой.
+matcap-credit = Мэткапы из Blender, CC0.
+error-matcap-unreadable = { $name } — не EXR, PNG или JPEG, или файл не читается.
+
 studio-color-source = Цвет
 color-material = Материалы
 color-clay = Глина

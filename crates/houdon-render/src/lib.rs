@@ -8,6 +8,7 @@
 mod composite;
 mod frame;
 mod light_mask;
+mod matcap;
 mod material;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;

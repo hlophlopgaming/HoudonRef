@@ -4,6 +4,7 @@
 use glam::Vec3;
 
 use crate::ObjectId;
+use crate::matcap::Matcap;
 
 /// Where an object's colour comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -24,8 +25,38 @@ impl ColorSource {
 /// Neutral light-grey clay, linear.
 pub const DEFAULT_CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// How surfaces are lit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ShadingMode {
+    /// A fixed light that ignores the Scene's Lights, to read form alone.
+    Solid,
+    /// The Scene's Lights, shadows and Room.
+    #[default]
+    Lit,
+}
+
+/// The light of the Solid mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum SolidLighting {
+    /// A soft studio light that turns with the view.
+    #[default]
+    Studio,
+    /// Colour from a matcap, a picture of a lit sphere.
+    Matcap,
+    /// No light at all: one flat colour per object.
+    Flat,
+}
+
+impl SolidLighting {
+    pub const ALL: [Self; 3] = [Self::Studio, Self::Matcap, Self::Flat];
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Shading {
+    pub mode: ShadingMode,
+    pub solid: SolidLighting,
+    /// The matcap of [`SolidLighting::Matcap`]; without one, Studio light.
+    pub matcap: Option<Matcap>,
     pub color: ColorSource,
     /// The Clay tone, linear RGB.
     pub clay_color: Vec3,
@@ -36,6 +67,9 @@ pub struct Shading {
 impl Default for Shading {
     fn default() -> Self {
         Self {
+            mode: ShadingMode::default(),
+            solid: SolidLighting::default(),
+            matcap: None,
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
             value: ValueStudy::default(),

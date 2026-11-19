@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use houdon_core::{Light, Model, ModelId, Room, Scene, Surface, ValueStudy};
+use houdon_core::{
+    Light, MatcapImage, Model, ModelId, Room, Scene, ShadingMode, SolidLighting, Surface,
+    ValueStudy,
+};
 
 /// The surface colour of an object, linear RGB. It changes with height
 /// from `below` to `above` between `from_y` and `to_y` (world space); the
@@ -72,6 +75,14 @@ pub struct Frame {
     pub clay_color: Vec3,
     /// The value study laid over the picture.
     pub value: ValueStudy,
+    /// Lit, or Solid with its light.
+    pub shading_mode: ShadingMode,
+    pub solid: SolidLighting,
+    /// The Solid mode's matcap, if one is chosen.
+    pub matcap: Option<Arc<MatcapImage>>,
+    /// The camera's right and up directions, for the Solid mode's light.
+    pub camera_right: Vec3,
+    pub camera_up: Vec3,
 }
 
 impl Frame {
@@ -114,6 +125,7 @@ impl Frame {
                 casts_shadows: true,
             })
         });
+        let view = scene.camera.view();
         Self {
             objects: room_object.into_iter().chain(objects).collect(),
             view_proj: scene.camera.view_projection(aspect),
@@ -128,6 +140,11 @@ impl Frame {
             eye: scene.camera.eye(),
             clay_color: scene.shading.clay_color,
             value: scene.shading.value,
+            shading_mode: scene.shading.mode,
+            solid: scene.shading.solid,
+            matcap: scene.shading.matcap.as_ref().map(|m| m.image.clone()),
+            camera_right: view.row(0).truncate(),
+            camera_up: view.row(1).truncate(),
         }
     }
 

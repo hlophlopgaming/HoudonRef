@@ -4,6 +4,7 @@
 
 mod app;
 mod masks;
+mod matcaps;
 mod studio;
 
 use app::HoudonApp;

@@ -5,10 +5,13 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
-use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
+use houdon_core::{
+    Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, ShadingMode, SolidLighting, Vertex,
+};
 
 use crate::composite::{AntiAliasing, Composite, SCENE_DEPTH_FORMAT};
 use crate::light_mask::MaskTextures;
+use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
 use crate::{Frame, FrameSurface, ObjectColors};
@@ -32,8 +35,19 @@ struct Globals {
     eye: [f32; 4],
     /// x: number of lights; y: 1 if the output needs gamma encoding.
     params: [u32; 4],
+    /// x: how surfaces are lit, one of the `SHADE_*` codes.
+    shading: [f32; 4],
+    /// xyz: the camera's right and up directions.
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
     lights: [GpuLight; MAX_LIGHTS],
 }
+
+/// `Globals::shading.x`: the Scene's lights, or one of the Solid lights.
+const SHADE_LIT: f32 = 0.0;
+const SHADE_STUDIO: f32 = 1.0;
+const SHADE_MATCAP: f32 = 2.0;
+const SHADE_FLAT: f32 = 3.0;
 
 /// `spot.w` of a light without a cone; the shader tests `spot.w > -1.5`.
 const NO_CONE: f32 = -2.0;
@@ -144,8 +158,10 @@ pub struct SceneRenderer {
     /// Rebuilt when the multisampling changes.
     pipelines: ScenePipelines,
     globals_buffer: wgpu::Buffer,
+    globals_layout: wgpu::BindGroupLayout,
     globals_bind_group: wgpu::BindGroup,
     masks: MaskTextures,
+    matcap: MatcapTexture,
     object_layout: wgpu::BindGroupLayout,
     object_buffer: wgpu::Buffer,
     object_bind_group: wgpu::BindGroup,
@@ -198,6 +214,7 @@ impl SceneRenderer {
 
         let globals_layout = globals_layout(device);
         let masks = MaskTextures::new(device);
+        let matcap = MatcapTexture::new(device);
         let object_layout = uniform_layout(
             device,
             "houdon_object_layout",
@@ -226,24 +243,8 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("houdon_globals_bind_group"),
-            layout: &globals_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&masks.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&masks.sampler),
-                },
-            ],
-        });
+        let globals_bind_group =
+            globals_bind_group(device, &globals_layout, &globals_buffer, &masks, &matcap);
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let object_stride = (size_of::<ObjectUniforms>() as u64).div_ceil(alignment) * alignment;
@@ -257,8 +258,10 @@ impl SceneRenderer {
             target_format,
             pipelines,
             globals_buffer,
+            globals_layout,
             globals_bind_group,
             masks,
+            matcap,
             object_layout,
             object_buffer,
             object_bind_group,
@@ -392,6 +395,9 @@ impl SceneRenderer {
             floor_color: room.floor_color.extend(0.0).to_array(),
             eye: frame.eye.extend(1.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
+            shading: [self.shade_code(device, queue, frame), 0.0, 0.0, 0.0],
+            camera_right: frame.camera_right.extend(0.0).to_array(),
+            camera_up: frame.camera_up.extend(0.0).to_array(),
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
@@ -464,6 +470,28 @@ impl SceneRenderer {
             ..Default::default()
         });
         self.draw_scene(&mut pass);
+    }
+
+    /// How `frame`'s surfaces are lit, uploading its matcap if it uses one.
+    fn shade_code(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) -> f32 {
+        match (frame.shading_mode, frame.solid, &frame.matcap) {
+            (ShadingMode::Lit, ..) => SHADE_LIT,
+            (ShadingMode::Solid, SolidLighting::Flat, _) => SHADE_FLAT,
+            (ShadingMode::Solid, SolidLighting::Matcap, Some(image)) => {
+                if self.matcap.prepare(device, queue, image) {
+                    self.globals_bind_group = globals_bind_group(
+                        device,
+                        &self.globals_layout,
+                        &self.globals_buffer,
+                        &self.masks,
+                        &self.matcap,
+                    );
+                }
+                SHADE_MATCAP
+            }
+            // Without a matcap, the Studio light.
+            (ShadingMode::Solid, ..) => SHADE_STUDIO,
+        }
     }
 
     /// Puts the last prepared picture into `render_pass`, as a value study
@@ -620,6 +648,57 @@ fn globals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+fn globals_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    masks: &MaskTextures,
+    matcap: &MatcapTexture,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("houdon_globals_bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&masks.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&masks.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&matcap.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&matcap.sampler),
             },
         ],
     })

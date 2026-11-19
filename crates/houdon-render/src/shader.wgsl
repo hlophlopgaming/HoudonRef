@@ -45,6 +45,11 @@ struct Globals {
     // x: number of lights; y: 1 if the output needs gamma encoding in the
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
+    // x: 0 the Scene's lights; Solid: 1 studio, 2 matcap, 3 flat.
+    shading: vec4<f32>,
+    // xyz: the camera's right and up directions.
+    camera_right: vec4<f32>,
+    camera_up: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -66,6 +71,9 @@ struct ObjectUniforms {
 // One mask per light, white lets the light through.
 @group(0) @binding(1) var light_masks: texture_2d_array<f32>;
 @group(0) @binding(2) var light_mask_sampler: sampler;
+// The Solid mode's matcap, linear colour.
+@group(0) @binding(3) var matcap: texture_2d<f32>;
+@group(0) @binding(4) var matcap_sampler: sampler;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
@@ -237,6 +245,30 @@ fn mask_through(light: Light, world: vec3<f32>) -> f32 {
     return textureSampleLevel(light_masks, light_mask_sampler, uv, i32(layer), 0.0).r;
 }
 
+// The Solid mode: light that ignores the Scene's lights, fixed to the view
+// so form reads the same from every side. `n` is the surface normal, `v`
+// the direction to the eye.
+fn solid_color(n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+    let mode = u.shading.x;
+    if mode > 2.5 {
+        // Flat: one colour, no light.
+        return albedo;
+    }
+    // The normal as the camera sees it: x right, y up, z towards the eye.
+    let facing = vec3<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz), dot(n, v));
+    if mode > 1.5 {
+        // The matcap's sphere, seen face on: the normal picks its point.
+        let uv = facing.xy * vec2<f32>(0.49, -0.49) + 0.5;
+        return textureSampleLevel(matcap, matcap_sampler, uv, 0.0).rgb * albedo;
+    }
+    // Studio: a key light from the upper left, a weaker fill from the right
+    // and soft light from above.
+    let key = max(dot(facing, normalize(vec3<f32>(-0.65, 0.55, 0.5))), 0.0);
+    let fill = max(dot(facing, normalize(vec3<f32>(0.75, 0.0, 0.6))), 0.0);
+    let sky = 0.12 + 0.08 * facing.y;
+    return albedo * (0.9 * key + 0.2 * fill + sky);
+}
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -319,6 +351,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let v = normalize(u.eye.xyz - in.world_position);
     let n_dot_v = max(dot(n, v), 1e-4);
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+
+    if u.shading.x > 0.5 {
+        var solid = solid_color(n, v, albedo);
+        solid = mix(solid, object.highlight.rgb, object.highlight.a);
+        if u.params.y == 1u {
+            solid = pow(solid, vec3<f32>(1.0 / 2.2));
+        }
+        return vec4<f32>(solid, 1.0);
+    }
 
     var direct = vec3<f32>(0.0);
     let shadow_angle = pixel_angle(in.clip_position.xy);

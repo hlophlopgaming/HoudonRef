@@ -105,6 +105,21 @@ mask-category-shapes = Shapes
 error-mask-needs-light = To use an image as a light mask, select a spot or directional light first, then drop the image.
 error-mask-unreadable = { $name } is not a PNG or JPEG image that can be read.
 
+studio-shading = Shading
+shading-solid = Solid
+shading-lit = Lit
+shading-render = Render
+shading-render-later = Coming in a later version: a higher-quality render on desktop.
+solid-studio = Studio
+solid-matcap = Matcap
+solid-flat = Flat
+studio-matcap = Matcap
+studio-matcap-none = None (choose one)
+matcap-picker = Matcaps
+matcap-picker-hint = Click a matcap to use it. While this window is open, drop an EXR, PNG or JPG on the window to use your own.
+matcap-credit = Matcaps from Blender, CC0.
+error-matcap-unreadable = { $name } is not an EXR, PNG or JPEG image that can be read.
+
 studio-color-source = Colour
 color-material = Material
 color-clay = Clay

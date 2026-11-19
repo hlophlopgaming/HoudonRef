@@ -7,13 +7,14 @@ use std::sync::{Arc, Mutex};
 use houdon_core::Transform;
 use houdon_core::{
     BuiltinRoom, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
-    LightMask, LoadError, MAX_LIGHTS, MaskImage, Model, ModelId, OrbitCamera, PLAUSIBLE_SIZE,
-    Scene, UnitSystem, ValueMode,
+    LightMask, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId, OrbitCamera,
+    PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
 
 use crate::masks::{self, MaskLibrary};
+use crate::matcaps::{self, MatcapLibrary};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -140,6 +141,8 @@ pub struct Studio {
     mask_category: masks::Category,
     /// A mask chosen for a light while its image was still loading.
     pending_mask: Option<(LightId, &'static str)>,
+    matcaps: MatcapLibrary,
+    matcap_picker_open: bool,
 }
 
 impl Studio {
@@ -157,6 +160,8 @@ impl Studio {
             mask_picker_open: false,
             mask_category: masks::Category::Windows,
             pending_mask: None,
+            matcaps: MatcapLibrary::default(),
+            matcap_picker_open: false,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -213,9 +218,15 @@ impl Studio {
     }
 
     fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
-        if matches!(extension(name).as_str(), "png" | "jpg" | "jpeg") {
-            self.load_mask_file(name, bytes, tr);
-            return;
+        // An image is a matcap while the matcap window is open (or an EXR,
+        // which only matcaps use), otherwise the selected light's mask.
+        match extension(name).as_str() {
+            "exr" => return self.load_matcap_file(name, bytes, tr),
+            "png" | "jpg" | "jpeg" if self.matcap_picker_open => {
+                return self.load_matcap_file(name, bytes, tr);
+            }
+            "png" | "jpg" | "jpeg" => return self.load_mask_file(name, bytes, tr),
+            _ => {}
         }
         let source = format!("file:{name}:{}", bytes.len());
         let load = || Model::from_gltf_slice(name, bytes);
@@ -236,7 +247,7 @@ impl Studio {
         for file in dropped {
             let name = file_name(file.path());
             match extension(&name).as_str() {
-                "glb" | "gltf" | "png" | "jpg" | "jpeg" => {}
+                "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => {}
                 "blend" => {
                     self.message = Some(tr.tr("error-blend-file"));
                     continue;
@@ -307,6 +318,71 @@ impl Studio {
         }
         if self.mask_picker_open {
             self.mask_picker(&ui.ctx().clone(), tr);
+        }
+        if self.matcap_picker_open {
+            self.matcap_picker(&ui.ctx().clone(), tr);
+        }
+    }
+
+    /// The window to pick the Solid mode's matcap.
+    fn matcap_picker(&mut self, ctx: &egui::Context, tr: &Localizer) {
+        let mut open = true;
+        egui::Window::new(tr.tr("matcap-picker"))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            for &(name, _) in matcaps::BUILT_IN {
+                                let Some(texture) = self.matcaps.thumbnail(ctx, name) else {
+                                    continue;
+                                };
+                                let button = egui::Button::image(
+                                    egui::Image::new(&texture)
+                                        .fit_to_exact_size(egui::vec2(64.0, 64.0)),
+                                );
+                                if ui.add(button).on_hover_text(name).clicked() {
+                                    chosen = Some(name);
+                                }
+                            }
+                        });
+                    });
+                ui.separator();
+                ui.weak(tr.tr("matcap-picker-hint"));
+                ui.weak(tr.tr("matcap-credit"));
+                if let Some(name) = chosen
+                    && let Some(image) = self.matcaps.image(name)
+                {
+                    self.set_matcap(name.to_owned(), image);
+                }
+            });
+        self.matcap_picker_open = open;
+    }
+
+    fn set_matcap(&mut self, name: String, image: Arc<MatcapImage>) {
+        let shading = &mut self.scene.shading;
+        shading.matcap = Some(Matcap { name, image });
+        shading.mode = ShadingMode::Solid;
+        shading.solid = SolidLighting::Matcap;
+    }
+
+    /// Uses a dropped image as the Solid mode's matcap.
+    fn load_matcap_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+        match MatcapImage::decode(bytes) {
+            Ok(image) => {
+                self.set_matcap(name.to_owned(), Arc::new(image));
+                self.message = None;
+            }
+            Err(error) => {
+                log::warn!("{name}: {error}");
+                self.message = Some(tr.tr_args(
+                    "error-matcap-unreadable",
+                    &[("name", name.to_owned().into())],
+                ));
+            }
         }
     }
 
@@ -487,6 +563,8 @@ impl Studio {
         ui.separator();
         self.lights_section(ui, tr);
         ui.separator();
+        self.shading_section(ui, tr);
+        ui.separator();
         self.color_section(ui, tr);
         ui.separator();
         self.values_section(ui, tr);
@@ -519,6 +597,48 @@ impl Studio {
         }
         ui.add(egui::Slider::new(&mut study.squint, 0.0..=1.0).text(tr.tr("values-squint")));
         ui.weak(tr.tr("values-hint"));
+    }
+
+    fn shading_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-shading"));
+        let shading = &mut self.scene.shading;
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(
+                &mut shading.mode,
+                ShadingMode::Solid,
+                tr.tr("shading-solid"),
+            );
+            ui.selectable_value(&mut shading.mode, ShadingMode::Lit, tr.tr("shading-lit"));
+            ui.add_enabled(
+                false,
+                egui::Button::selectable(false, tr.tr("shading-render")),
+            )
+            .on_disabled_hover_text(tr.tr("shading-render-later"));
+        });
+        if shading.mode != ShadingMode::Solid {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for lighting in SolidLighting::ALL {
+                ui.selectable_value(
+                    &mut shading.solid,
+                    lighting,
+                    tr.tr(solid_lighting_message_id(lighting)),
+                );
+            }
+        });
+        if shading.solid == SolidLighting::Matcap {
+            ui.horizontal(|ui| {
+                ui.label(tr.tr("studio-matcap"));
+                let name = shading
+                    .matcap
+                    .as_ref()
+                    .map_or_else(|| tr.tr("studio-matcap-none"), |m| m.name.clone());
+                if ui.button(name).clicked() {
+                    self.matcap_picker_open = true;
+                }
+            });
+        }
     }
 
     fn color_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -1079,6 +1199,15 @@ fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
         size.x.round().max(1.0) as u32,
         size.y.round().max(1.0) as u32,
     ]
+}
+
+/// Message id of a Solid light's name.
+fn solid_lighting_message_id(lighting: SolidLighting) -> &'static str {
+    match lighting {
+        SolidLighting::Studio => "solid-studio",
+        SolidLighting::Matcap => "solid-matcap",
+        SolidLighting::Flat => "solid-flat",
+    }
 }
 
 /// Message id of a colour source's name.
