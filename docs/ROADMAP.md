@@ -29,7 +29,7 @@ Later: `houdon-import` for formats beyond glTF, and a content-pack crate for the
 
 ## Stage 1: Studio MVP
 
-Stage 1a is specified in issue #1 and split into tickets #2 to #19 and #23.
+Stage 1a is specified in issue #1 and split into tickets #2 to #19 and #23 to #25.
 
 Done:
 
@@ -42,6 +42,7 @@ Done:
 Next:
 
 - [ ] Light masks (#13), Solid mode with matcaps (#15), cavity (#16), contour lines and wireframe (#17).
+- [ ] Value mode: 2 to 5 tones, grey and squint (#25).
 - [ ] Anti-aliasing: MSAA in the viewport, supersampled exports (#23); smooth shadow edges and per-light shadow softness (#24).
 - [ ] Scene files (#11), presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
@@ -82,7 +83,6 @@ Not tickets yet; to be grilled and specified when their time comes.
 
 ### Drawing aids (proposed for before release where cheap)
 
-- **Value mode (notan):** reduce the picture to 2, 3, 4 or 5 tones (light, half-tone, shadow, accents), a grey mode that drops colour and keeps lightness, and a "squint" blur. Shows the big masses of light and shadow, as artists do by squinting.
 - **Compare with my drawing:** load a photo of the artist's drawing and lay it over the picture with transparency or as a difference, to see where proportions and angles drift.
 - **Grids and guides over the picture:** rule of thirds, proportional grid, plumb lines, horizon and vanishing points; measuring angles and ratios on screen, like sighting with a pencil.
 - **Mirror the picture** with one key, to see one's own errors afresh.
