@@ -1207,3 +1207,95 @@ fn flat_light_gives_one_colour_per_object() {
     figure.dedup();
     assert_eq!(figure.len(), 1, "one flat colour: {figure:?}");
 }
+
+/// Ground with a ridge at x = -0.4 and a trench at x = +0.4, seen from the
+/// front and above, with the room hidden.
+fn ridge_and_trench(mode: houdon_core::ShadingMode) -> Scene {
+    let height = |x: f32| {
+        0.12 * (1.0 - (x + 0.4).abs() / 0.15).max(0.0)
+            - 0.12 * (1.0 - (x - 0.4).abs() / 0.15).max(0.0)
+    };
+    let n = 60;
+    let mut positions = Vec::new();
+    for j in 0..=n / 2 {
+        for i in 0..=n {
+            let x = -1.0 + 2.0 * i as f32 / n as f32;
+            let z = -0.5 + j as f32 / (n / 2) as f32;
+            positions.push(glam::Vec3::new(x, height(x) + 0.2, z));
+        }
+    }
+    let mut indices = Vec::new();
+    for j in 0..n / 2 {
+        for i in 0..n {
+            let a = (j * (n + 1) + i) as u32;
+            let (b, c, d) = (a + 1, a + n as u32 + 1, a + n as u32 + 2);
+            indices.extend([a, c, b, b, c, d]);
+        }
+    }
+    let mut scene = Scene::new();
+    scene.room.visible = false;
+    let id = scene.add_model(Model::from_mesh("ground", positions, indices));
+    let object = scene.add_object(id).unwrap();
+    scene.set_transform(object, houdon_core::Transform::default());
+    scene.select(None);
+    scene.shading.mode = mode;
+    scene.shading.solid = houdon_core::SolidLighting::Flat;
+    scene.camera.target = glam::Vec3::new(0.0, 0.2, 0.0);
+    scene.camera.distance = 3.0;
+    scene.camera.pitch = 1.1;
+    scene.camera.yaw = 0.0;
+    scene
+}
+
+/// Brightness on the ridge and in the trench.
+fn ridge_and_trench_brightness(renderer: &mut OffscreenRenderer, scene: &Scene) -> (u32, u32) {
+    let image = sharp(renderer, scene);
+    let to_world = scene.object_matrix(&scene.objects()[0]);
+    let at = |x: f32, y: f32| {
+        let (px, py) = pixel_of(scene, to_world.transform_point3(glam::Vec3::new(x, y, 0.0)));
+        brightness(image.pixel(px, py))
+    };
+    (at(-0.4, 0.32), at(0.4, 0.08))
+}
+
+#[test]
+fn cavity_brightens_ridges_and_darkens_hollows() {
+    use houdon_core::{Cavity, ShadingMode};
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    for mode in [ShadingMode::Solid, ShadingMode::Lit] {
+        let plain_scene = ridge_and_trench(mode);
+        let plain = ridge_and_trench_brightness(&mut renderer, &plain_scene);
+        for (kind, cavity) in [
+            (
+                "geometry",
+                Cavity {
+                    geometry: true,
+                    ..Cavity::default()
+                },
+            ),
+            (
+                "screen",
+                Cavity {
+                    screen: true,
+                    ..Cavity::default()
+                },
+            ),
+        ] {
+            let mut scene = ridge_and_trench(mode);
+            scene.shading.cavity = cavity;
+            let (ridge, trench) = ridge_and_trench_brightness(&mut renderer, &scene);
+            assert!(
+                ridge > plain.0 + 10,
+                "{mode:?} {kind}: ridge brighter ({} -> {ridge})",
+                plain.0
+            );
+            assert!(
+                trench + 10 < plain.1,
+                "{mode:?} {kind}: trench darker ({} -> {trench})",
+                plain.1
+            );
+        }
+    }
+}

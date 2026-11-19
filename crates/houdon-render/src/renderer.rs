@@ -9,7 +9,7 @@ use houdon_core::{
     Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, ShadingMode, SolidLighting, Vertex,
 };
 
-use crate::composite::{AntiAliasing, Composite, SCENE_DEPTH_FORMAT};
+use crate::composite::{AntiAliasing, Composite, NORMAL_FORMAT, SCENE_DEPTH_FORMAT};
 use crate::light_mask::MaskTextures;
 use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
@@ -40,6 +40,8 @@ struct Globals {
     /// xyz: the camera's right and up directions.
     camera_right: [f32; 4],
     camera_up: [f32; 4],
+    /// x, y: geometry cavity ridge and hollow strength (0 when it is off).
+    cavity: [f32; 4],
     lights: [GpuLight; MAX_LIGHTS],
 }
 
@@ -146,6 +148,8 @@ struct DrawEntry {
 
 pub(crate) struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
+    /// One curvature per vertex, for the geometry cavity.
+    curvature_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
 }
 
@@ -398,6 +402,16 @@ impl SceneRenderer {
             shading: [self.shade_code(device, queue, frame), 0.0, 0.0, 0.0],
             camera_right: frame.camera_right.extend(0.0).to_array(),
             camera_up: frame.camera_up.extend(0.0).to_array(),
+            cavity: if frame.cavity.geometry {
+                [
+                    frame.cavity.geometry_ridge,
+                    frame.cavity.geometry_hollow,
+                    0.0,
+                    0.0,
+                ]
+            } else {
+                [0.0; 4]
+            },
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
@@ -431,8 +445,14 @@ impl SceneRenderer {
                 anti_aliasing.samples,
             );
         }
-        self.composite
-            .prepare(device, queue, size, anti_aliasing, &frame.value);
+        self.composite.prepare(
+            device,
+            queue,
+            size,
+            anti_aliasing,
+            &frame.value,
+            &frame.cavity,
+        );
         let Some(target) = &self.composite.target else {
             return;
         };
@@ -442,23 +462,30 @@ impl SceneRenderer {
         } else {
             frame.room.backdrop_color.to_array().map(f64::from)
         };
-        let (view, resolve_target) = target.color_attachment();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("houdon_scene_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        // Only the resolved pictures are read afterwards.
+        let attachment = |(view, resolve_target): (_, Option<_>), clear| {
+            Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
-                    // Only the resolved picture is read afterwards.
+                    load: wgpu::LoadOp::Clear(clear),
                     store: if resolve_target.is_some() {
                         wgpu::StoreOp::Discard
                     } else {
                         wgpu::StoreOp::Store
                     },
                 },
-            })],
+            })
+        };
+        let [color, normals] = target.attachments();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("houdon_scene_pass"),
+            color_attachments: &[
+                attachment(color, wgpu::Color { r, g, b, a: 1.0 }),
+                // No surface: the farthest distance.
+                attachment(normals, wgpu::Color::WHITE),
+            ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &target.depth_view,
                 depth_ops: Some(wgpu::Operations {
@@ -516,6 +543,7 @@ impl SceneRenderer {
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, mesh.curvature_buffer.slice(..));
             render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(part_range(&entry.part), 0, 0..1);
         }
@@ -584,6 +612,10 @@ fn scene_pipeline(
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+            }), Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<f32>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![3 => Float32],
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -606,11 +638,18 @@ fn scene_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &[
+                Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+                Some(wgpu::ColorTargetState {
+                    format: NORMAL_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         multiview_mask: None,
@@ -757,6 +796,11 @@ fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
         vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("houdon_mesh_vertices"),
             contents: bytemuck::cast_slice(&model.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        }),
+        curvature_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("houdon_mesh_curvature"),
+            contents: bytemuck::cast_slice(&model.vertex_curvature()),
             usage: wgpu::BufferUsages::VERTEX,
         }),
         index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

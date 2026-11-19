@@ -50,6 +50,8 @@ struct Globals {
     // xyz: the camera's right and up directions.
     camera_right: vec4<f32>,
     camera_up: vec4<f32>,
+    // x, y: geometry cavity ridge and hollow strength (0 when it is off).
+    cavity: vec4<f32>,
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -273,6 +275,8 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // How the mesh bends here: positive on ridges, negative in hollows.
+    @location(3) curvature: f32,
 };
 
 struct VertexOutput {
@@ -280,7 +284,15 @@ struct VertexOutput {
     @location(0) normal: vec3<f32>,
     @location(1) world_position: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) curvature: f32,
 };
+
+// The geometry cavity: brighter on ridges, darker in hollows.
+fn geometry_cavity(curvature: f32) -> f32 {
+    let ridge = u.cavity.x * max(curvature, 0.0);
+    let hollow = u.cavity.y * max(-curvature, 0.0);
+    return clamp(1.0 + 2.0 * (ridge - hollow), 0.0, 3.0);
+}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -290,6 +302,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_position = world.xyz;
     out.normal = (object.normal * vec4<f32>(in.normal, 0.0)).xyz;
     out.uv = in.uv;
+    out.curvature = in.curvature;
     return out;
 }
 
@@ -326,8 +339,30 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
+// The colour, and for the screen-space cavity the surface as the camera
+// sees it: rg the normal's x (right) and y (up) from -1..1 to 0..1; ba the
+// distance from the eye over MAX_SURFACE_DISTANCE in two 8-bit halves.
+// Where nothing was drawn it stays cleared to the farthest distance.
+const MAX_SURFACE_DISTANCE: f32 = 200.0;
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) normal: vec4<f32>,
+};
+
+fn shaded(color: vec3<f32>, n: vec3<f32>, world: vec3<f32>) -> FragmentOutput {
+    var out: FragmentOutput;
+    out.color = vec4<f32>(color, 1.0);
+    let facing = vec2<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz));
+    let distance = clamp(length(u.eye.xyz - world) / MAX_SURFACE_DISTANCE, 0.0, 0.999);
+    let high = floor(distance * 255.0) / 255.0;
+    let low = fract(distance * 255.0);
+    out.normal = vec4<f32>(facing * 0.5 + 0.5, high, low);
+    return out;
+}
+
 @fragment
-fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
     var n = normalize(in.normal);
     if !front_facing {
         n = -n;
@@ -353,12 +388,12 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
 
     if u.shading.x > 0.5 {
-        var solid = solid_color(n, v, albedo);
+        var solid = solid_color(n, v, albedo) * geometry_cavity(in.curvature);
         solid = mix(solid, object.highlight.rgb, object.highlight.a);
         if u.params.y == 1u {
             solid = pow(solid, vec3<f32>(1.0 / 2.2));
         }
-        return vec4<f32>(solid, 1.0);
+        return shaded(solid, n, in.world_position);
     }
 
     var direct = vec3<f32>(0.0);
@@ -402,10 +437,10 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     }
     let ambient_light = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
     let ambient = ambient_light * ((1.0 - metallic) * albedo + f0 * (1.0 - roughness) * 0.5);
-    var color = direct + ambient;
+    var color = (direct + ambient) * geometry_cavity(in.curvature);
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
-    return vec4<f32>(color, 1.0);
+    return shaded(color, n, in.world_position);
 }

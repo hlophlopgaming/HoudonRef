@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use houdon_core::{
-    Light, MatcapImage, Model, ModelId, Room, Scene, ShadingMode, SolidLighting, Surface,
+    Cavity, Light, MatcapImage, Model, ModelId, Room, Scene, ShadingMode, SolidLighting, Surface,
     ValueStudy,
 };
 
@@ -83,6 +83,8 @@ pub struct Frame {
     /// The camera's right and up directions, for the Solid mode's light.
     pub camera_right: Vec3,
     pub camera_up: Vec3,
+    /// The cavity overlay.
+    pub cavity: Cavity,
 }
 
 impl Frame {
@@ -145,6 +147,7 @@ impl Frame {
             matcap: scene.shading.matcap.as_ref().map(|m| m.image.clone()),
             camera_right: view.row(0).truncate(),
             camera_up: view.row(1).truncate(),
+            cavity: scene.shading.cavity,
         }
     }
 

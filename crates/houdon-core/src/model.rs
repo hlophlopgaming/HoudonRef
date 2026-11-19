@@ -219,6 +219,60 @@ impl Model {
         Self::from_vertices(name, vertices, indices)
     }
 
+    /// How the surface bends at each vertex, for the cavity overlay:
+    /// positive on ridges, negative in hollows, about 0 where it is flat.
+    /// It is the mean sine of the angle by which the edges leaving a
+    /// vertex bend away from its tangent plane, so it does not depend on
+    /// the model's size. Vertices at the same position (split for flat
+    /// shading or texture seams) count as one point of the surface.
+    pub fn vertex_curvature(&self) -> Vec<f32> {
+        use std::collections::HashMap;
+        let key = |p: [f32; 3]| p.map(|c| (c * 1e5).round() as i64);
+        let mut points: HashMap<[i64; 3], usize> = HashMap::new();
+        let point_of: Vec<usize> = self
+            .vertices
+            .iter()
+            .map(|v| {
+                let next = points.len();
+                *points.entry(key(v.position)).or_insert(next)
+            })
+            .collect();
+        let count = points.len();
+        let mut position = vec![Vec3::ZERO; count];
+        for (v, &p) in self.vertices.iter().zip(&point_of) {
+            position[p] = Vec3::from(v.position);
+        }
+        // Area-weighted normals of the merged surface, and its edges.
+        let mut normal = vec![Vec3::ZERO; count];
+        let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for tri in self.indices.as_chunks::<3>().0 {
+            let [a, b, c] = tri.map(|i| point_of[i as usize]);
+            let face = (position[b] - position[a]).cross(position[c] - position[a]);
+            for (p, q, r) in [(a, b, c), (b, c, a), (c, a, b)] {
+                normal[p] += face;
+                for n in [q, r] {
+                    if n != p && !neighbours[p].contains(&n) {
+                        neighbours[p].push(n);
+                    }
+                }
+            }
+        }
+        let curvature: Vec<f32> = (0..count)
+            .map(|p| {
+                let n = normal[p].normalize_or_zero();
+                if n == Vec3::ZERO || neighbours[p].is_empty() {
+                    return 0.0;
+                }
+                let bend: f32 = neighbours[p]
+                    .iter()
+                    .map(|&q| -n.dot((position[q] - position[p]).normalize_or_zero()))
+                    .sum();
+                bend / neighbours[p].len() as f32
+            })
+            .collect();
+        point_of.iter().map(|&p| curvature[p]).collect()
+    }
+
     /// Whether the model is shaped like a standing human body: at least
     /// [`FIGURE_ASPECT`] times taller than it is wide or deep.
     pub fn looks_like_figure(&self) -> bool {
@@ -518,6 +572,68 @@ mod tests {
 
     const MALE: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
     const FEMALE: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
+
+    /// A strip of ground along X with a fold across it at x = 0: raised
+    /// to a ridge (`height` > 0) or sunk into a trench (`height` < 0).
+    fn fold(height: f32) -> Model {
+        let mut positions = Vec::new();
+        for z in 0..3 {
+            for x in -2i32..=2 {
+                let y = height * (1.0 - x.abs() as f32 / 2.0);
+                positions.push(Vec3::new(x as f32 * 0.5, y, z as f32 * 0.5));
+            }
+        }
+        let mut indices = Vec::new();
+        for z in 0..2u32 {
+            for x in 0..4u32 {
+                let a = z * 5 + x;
+                let (b, c, d) = (a + 1, a + 5, a + 6);
+                indices.extend([a, c, b, b, c, d]);
+            }
+        }
+        Model::from_mesh("fold", positions, indices)
+    }
+
+    /// The curvature on the fold line, in the middle row.
+    fn curvature_on_the_fold(model: &Model) -> f32 {
+        model.vertex_curvature()[5 + 2]
+    }
+
+    #[test]
+    fn a_ridge_bends_one_way_and_a_hollow_the_other() {
+        let ridge = curvature_on_the_fold(&fold(0.5));
+        let hollow = curvature_on_the_fold(&fold(-0.5));
+        assert!(ridge > 0.2, "ridge: {ridge}");
+        assert!(hollow < -0.2, "hollow: {hollow}");
+        let flat = curvature_on_the_fold(&fold(0.0));
+        assert!(flat.abs() < 1e-5, "flat ground: {flat}");
+    }
+
+    #[test]
+    fn curvature_does_not_depend_on_size_or_split_vertices() {
+        let small = fold(0.5);
+        let mut large = fold(0.5);
+        for v in &mut large.vertices {
+            v.position = v.position.map(|c| c * 100.0);
+        }
+        let (a, b) = (curvature_on_the_fold(&small), curvature_on_the_fold(&large));
+        assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+
+        // The same surface with every triangle's vertices split apart, as
+        // for flat shading, bends the same.
+        let mut split = Model::empty("split");
+        for &i in &small.indices {
+            split.vertices.push(small.vertices[i as usize]);
+            split.indices.push(split.indices.len() as u32);
+        }
+        let curvature = split.vertex_curvature();
+        let on_fold = split
+            .vertices
+            .iter()
+            .position(|v| v.position == small.vertices[7].position)
+            .unwrap();
+        assert!((curvature[on_fold] - a).abs() < 1e-4);
+    }
 
     #[test]
     fn bounds_of_points() {

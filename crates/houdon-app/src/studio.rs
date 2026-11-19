@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
-    BuiltinRoom, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
+    BuiltinRoom, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
     LightMask, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId, OrbitCamera,
     PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
@@ -615,6 +615,7 @@ impl Studio {
             )
             .on_disabled_hover_text(tr.tr("shading-render-later"));
         });
+        cavity_controls(ui, tr, &mut shading.cavity);
         if shading.mode != ShadingMode::Solid {
             return;
         }
@@ -1199,6 +1200,41 @@ fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
         size.x.round().max(1.0) as u32,
         size.y.round().max(1.0) as u32,
     ]
+}
+
+/// The cavity overlay's two kinds, each with its ridge and hollow strength.
+fn cavity_controls(ui: &mut egui::Ui, tr: &Localizer, cavity: &mut Cavity) {
+    ui.label(tr.tr("studio-cavity"))
+        .on_hover_text(tr.tr("cavity-hint"));
+    let kinds = [
+        (
+            "cavity-geometry",
+            &mut cavity.geometry,
+            &mut cavity.geometry_ridge,
+            &mut cavity.geometry_hollow,
+        ),
+        (
+            "cavity-screen",
+            &mut cavity.screen,
+            &mut cavity.screen_ridge,
+            &mut cavity.screen_hollow,
+        ),
+    ];
+    for (label, on, ridge, hollow) in kinds {
+        ui.checkbox(on, tr.tr(label));
+        if *on {
+            ui.indent(label, |ui| {
+                ui.add(
+                    egui::Slider::new(ridge, 0.0..=Cavity::MAX_STRENGTH)
+                        .text(tr.tr("cavity-ridge")),
+                );
+                ui.add(
+                    egui::Slider::new(hollow, 0.0..=Cavity::MAX_STRENGTH)
+                        .text(tr.tr("cavity-hollow")),
+                );
+            });
+        }
+    }
 }
 
 /// Message id of a Solid light's name.

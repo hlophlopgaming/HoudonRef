@@ -51,12 +51,50 @@ impl SolidLighting {
     pub const ALL: [Self; 3] = [Self::Studio, Self::Matcap, Self::Flat];
 }
 
+/// The cavity overlay: brightens ridges and darkens hollows so small
+/// changes of form read, in Solid and Lit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cavity {
+    /// From the mesh's curvature: stable while the camera moves.
+    pub geometry: bool,
+    pub geometry_ridge: f32,
+    pub geometry_hollow: f32,
+    /// From the picture's normals: fine detail at any distance.
+    pub screen: bool,
+    pub screen_ridge: f32,
+    pub screen_hollow: f32,
+}
+
+impl Cavity {
+    /// The largest ridge or hollow strength.
+    pub const MAX_STRENGTH: f32 = 2.0;
+
+    pub fn is_on(&self) -> bool {
+        self.geometry || self.screen
+    }
+}
+
+impl Default for Cavity {
+    fn default() -> Self {
+        Self {
+            geometry: false,
+            geometry_ridge: 1.0,
+            geometry_hollow: 1.0,
+            screen: false,
+            screen_ridge: 1.0,
+            screen_hollow: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Shading {
     pub mode: ShadingMode,
     pub solid: SolidLighting,
     /// The matcap of [`SolidLighting::Matcap`]; without one, Studio light.
     pub matcap: Option<Matcap>,
+    /// Off by default.
+    pub cavity: Cavity,
     pub color: ColorSource,
     /// The Clay tone, linear RGB.
     pub clay_color: Vec3,
@@ -70,6 +108,7 @@ impl Default for Shading {
             mode: ShadingMode::default(),
             solid: SolidLighting::default(),
             matcap: None,
+            cavity: Cavity::default(),
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
             value: ValueStudy::default(),

@@ -23,7 +23,7 @@ pub use scene::{
     MAX_LIGHTS, MIN_EYE_HEIGHT, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform,
 };
 pub use shading::{
-    ColorSource, DEFAULT_CLAY_COLOR, Shading, ShadingMode, SolidLighting, Surface, ValueMode,
-    ValueStudy,
+    Cavity, ColorSource, DEFAULT_CLAY_COLOR, Shading, ShadingMode, SolidLighting, Surface,
+    ValueMode, ValueStudy,
 };
 pub use units::{Length, LengthUnit, UnitSystem};
