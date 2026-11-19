@@ -29,11 +29,25 @@ Later: `houdon-import` for formats beyond glTF, and a content-pack crate for the
 
 ## Stage 1: Studio MVP
 
-- Key, fill and rim lights; shadow maps; light presets as RON files.
-- Backgrounds and rooms.
-- Saved camera views.
-- OBJ import.
-- Desktop `.blend` import through an installed Blender (headless export to glTF). Web and Android show conversion instructions instead.
+Stage 1a is specified in issue #1 and split into tickets #2 to #19 and #23.
+
+Done:
+
+- [x] Scene with several objects, Figures at real height, metric or imperial units (#2, #3, #4).
+- [x] Up to 16 directional, point and spot lights (#5), with shadows (#12).
+- [x] Room: floor sweeping into the backdrop, built-in grey, white and dark studios (#6).
+- [x] glTF materials; colour from materials, Clay or Random (#7).
+- [x] Built-in reference heads: Asaro head and planar head.
+
+Next:
+
+- [ ] Light masks (#13), Solid mode with matcaps (#15), cavity (#16), contour lines and wireframe (#17).
+- [ ] Anti-aliasing: MSAA in the viewport, supersampled exports (#23).
+- [ ] Scene files (#11), presets for light, room and camera (#18).
+- [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
+- [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
+
+Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.
 
 ## Stage 2: Atelier MVP
 
