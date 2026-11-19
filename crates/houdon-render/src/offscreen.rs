@@ -114,7 +114,7 @@ impl OffscreenRenderer {
                 label: Some("houdon_offscreen"),
             });
         {
-            let [r, g, b] = frame.background.map(|c| f64::from(c) / 255.0);
+            let [r, g, b] = frame.clear_color().map(|c| f64::from(c) / 255.0);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("houdon_offscreen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

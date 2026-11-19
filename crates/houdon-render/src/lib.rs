@@ -10,7 +10,7 @@ mod frame;
 mod offscreen;
 mod renderer;
 
-pub use frame::{Frame, FrameObject};
+pub use frame::{Frame, FrameObject, ObjectColors};
 #[cfg(not(target_arch = "wasm32"))]
 pub use offscreen::{Image, OffscreenError, OffscreenRenderer};
 pub use renderer::{CLAY_COLOR, SceneRenderer, ViewportCallback};

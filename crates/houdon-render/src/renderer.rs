@@ -20,12 +20,10 @@ const SELECTION_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.35];
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
-    /// rgb: sky colour; a: ambient intensity.
+    /// rgb: ambient colour from above (the backdrop); a: ambient intensity.
     sky_color: [f32; 4],
-    /// rgb: ground colour.
+    /// rgb: ambient colour from below (the floor).
     ground_color: [f32; 4],
-    /// rgb: surface albedo.
-    base_color: [f32; 4],
     /// x: number of lights; y: 1 if the output needs gamma encoding.
     params: [u32; 4],
     lights: [GpuLight; MAX_LIGHTS],
@@ -86,6 +84,10 @@ struct ObjectUniforms {
     normal: [[f32; 4]; 4],
     /// rgb: highlight colour; a: how much of it to mix in.
     highlight: [f32; 4],
+    /// rgb: surface colour below `color_below.a` (world height).
+    color_below: [f32; 4],
+    /// rgb: surface colour above `color_above.a` (world height).
+    color_above: [f32; 4],
 }
 
 struct GpuMesh {
@@ -261,6 +263,8 @@ impl SceneRenderer {
             let uniforms = ObjectUniforms {
                 model: object.transform.to_cols_array_2d(),
                 normal: object.transform.inverse().transpose().to_cols_array_2d(),
+                color_below: object.colors.below.extend(object.colors.from_y).to_array(),
+                color_above: object.colors.above.extend(object.colors.to_y).to_array(),
                 highlight: if object.selected {
                     SELECTION_COLOR
                 } else {
@@ -281,12 +285,14 @@ impl SceneRenderer {
         for (slot, light) in lights.iter_mut().zip(&frame.lights) {
             *slot = GpuLight::new(light, frame.light_centre);
         }
-        let ambient = &frame.ambient;
+        let room = &frame.room;
         let globals = Globals {
             view_proj: frame.view_proj.to_cols_array_2d(),
-            sky_color: ambient.sky_color.extend(ambient.intensity).to_array(),
-            ground_color: ambient.ground_color.extend(0.0).to_array(),
-            base_color: CLAY_COLOR.extend(1.0).to_array(),
+            sky_color: room
+                .backdrop_color
+                .extend(room.ambient_intensity)
+                .to_array(),
+            ground_color: room.floor_color.extend(0.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
             lights,
         };

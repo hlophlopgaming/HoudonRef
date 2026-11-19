@@ -11,6 +11,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 
 use crate::light::{Light, LightId, LightKind};
 use crate::model::DEFAULT_FIGURE_HEIGHT;
+use crate::room::{Room, RoomShape};
 use crate::{Bounds, Model, OrbitCamera};
 
 /// Identifies a model. Ids are unique for the whole run of the app, so the
@@ -95,24 +96,9 @@ const NEW_LIGHT_FILL: f32 = 0.5;
 /// The most lights a scene can hold; the renderer's light array has this size.
 pub const MAX_LIGHTS: usize = 16;
 
-/// Light that comes from everywhere: a sky colour from above and a ground
-/// colour from below, in linear RGB.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Ambient {
-    pub sky_color: Vec3,
-    pub ground_color: Vec3,
-    pub intensity: f32,
-}
-
-impl Default for Ambient {
-    fn default() -> Self {
-        Self {
-            sky_color: Vec3::new(0.85, 0.9, 1.0),
-            ground_color: Vec3::new(0.35, 0.3, 0.25),
-            intensity: 0.15,
-        }
-    }
-}
+/// The lowest the camera's eye goes while the floor is shown, metres: a
+/// camera on the floor looking up, not under it.
+pub const MIN_EYE_HEIGHT: f32 = 0.05;
 
 /// Gap left between a new object and the objects already in the scene, metres.
 const PLACEMENT_GAP: f32 = 0.1;
@@ -126,9 +112,10 @@ pub struct Scene {
     lights: Vec<Light>,
     next_light: u64,
     pub camera: OrbitCamera,
-    pub ambient: Ambient,
-    /// Background colour, sRGB.
-    pub background: [u8; 3],
+    pub room: Room,
+    /// The room's mesh for the current objects, rebuilt only when its
+    /// shape changes.
+    room_cache: std::sync::Mutex<Option<(RoomShape, ModelId, Arc<Model>)>>,
 }
 
 /// An angle in radians brought into -π..π.
@@ -170,8 +157,8 @@ impl Scene {
             }],
             next_light: 2,
             camera: OrbitCamera::default(),
-            ambient: Ambient::default(),
-            background: [40, 40, 40],
+            room: Room::default(),
+            room_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -459,6 +446,46 @@ impl Scene {
         let before = self.lights.len();
         self.lights.retain(|l| l.id != id);
         self.lights.len() != before
+    }
+
+    /// The room's floor-to-backdrop mesh around the current objects, with an
+    /// id that stays the same while the room's shape does.
+    pub fn room_model(&self) -> Option<(ModelId, Arc<Model>)> {
+        let shape = RoomShape::around(&self.bounds());
+        let mut cache = self.room_cache.lock().ok()?;
+        if let Some((cached, id, model)) = cache.as_ref()
+            && *cached == shape
+        {
+            return Some((*id, Arc::clone(model)));
+        }
+        let model = Arc::new(shape.mesh());
+        let id = ModelId::next();
+        *cache = Some((shape, id, Arc::clone(&model)));
+        Some((id, model))
+    }
+
+    /// Lifts the camera back above the floor if it went under it, by
+    /// limiting how far it looks from below. Does nothing while the floor
+    /// is hidden.
+    pub fn keep_camera_above_floor(&mut self) {
+        if !self.room.visible || self.camera.eye().y >= MIN_EYE_HEIGHT {
+            return;
+        }
+        let camera = &mut self.camera;
+        let rise = ((MIN_EYE_HEIGHT - camera.target.y) / camera.distance).clamp(-1.0, 1.0);
+        camera.pitch = rise
+            .asin()
+            .clamp(OrbitCamera::MIN_PITCH, OrbitCamera::MAX_PITCH);
+        if camera.eye().y < MIN_EYE_HEIGHT {
+            // The target itself is too low to look at from above the floor
+            // at this distance: raise the target instead.
+            camera.target.y += MIN_EYE_HEIGHT - camera.eye().y;
+        }
+    }
+
+    /// The room's shape around the current objects.
+    pub fn room_shape(&self) -> RoomShape {
+        RoomShape::around(&self.bounds())
     }
 
     /// The point lights are placed around and spot lights aim at: the
@@ -921,6 +948,48 @@ mod tests {
         let (scene, _, _, _) = two_figure_scene();
         assert!((scene.light_centre() - scene.bounds().center()).length() < 1e-5);
         assert_eq!(Scene::new().light_centre(), Vec3::ZERO);
+    }
+
+    #[test]
+    fn a_new_scene_stands_in_the_grey_room() {
+        let scene = Scene::new();
+        assert_eq!(scene.room, crate::Room::builtin(crate::BuiltinRoom::Grey));
+        assert!(scene.room.visible);
+    }
+
+    #[test]
+    fn the_camera_stays_above_a_visible_floor() {
+        let (mut scene, _, _, _) = two_figure_scene();
+        scene.frame_camera(1.5);
+        scene.camera.orbit(0.0, -1.5);
+        assert!(
+            scene.camera.eye().y < 0.0,
+            "orbiting alone goes under the floor"
+        );
+        scene.keep_camera_above_floor();
+        assert!(
+            (scene.camera.eye().y - MIN_EYE_HEIGHT).abs() < 1e-4,
+            "{}",
+            scene.camera.eye().y
+        );
+
+        // Without the floor shown, the camera may look from anywhere.
+        scene.room.visible = false;
+        scene.camera.orbit(0.0, -0.3);
+        let below = scene.camera;
+        scene.keep_camera_above_floor();
+        assert_eq!(scene.camera, below);
+    }
+
+    #[test]
+    fn the_room_mesh_surrounds_the_objects_and_is_reused() {
+        let (scene, _, _, _) = two_figure_scene();
+        let (id, room) = scene.room_model().expect("a scene with objects has a room");
+        let objects = scene.bounds();
+        assert!(room.bounds.min.x <= objects.min.x && room.bounds.max.x >= objects.max.x);
+        assert!(room.bounds.min.z <= objects.min.z);
+        let (again, _) = scene.room_model().unwrap();
+        assert_eq!(id, again, "the same room is not rebuilt");
     }
 
     #[test]

@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use houdon_core::{
-    LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model, ModelId, OrbitCamera,
-    PLAUSIBLE_SIZE, Scene, UnitSystem,
+    BuiltinRoom, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model, ModelId,
+    OrbitCamera, PLAUSIBLE_SIZE, Room, Scene, UnitSystem,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -237,14 +237,39 @@ impl Studio {
         ui.separator();
         self.lights_section(ui, tr);
         ui.separator();
-        ui.add(
-            egui::Slider::new(&mut self.scene.ambient.intensity, 0.0..=1.0)
-                .text(tr.tr("studio-ambient")),
-        );
-        ui.horizontal(|ui| {
-            ui.color_edit_button_srgb(&mut self.scene.background);
-            ui.label(tr.tr("studio-background"));
+        self.room_section(ui, tr);
+    }
+
+    fn room_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        ui.strong(tr.tr("studio-room"));
+        ui.horizontal_wrapped(|ui| {
+            for builtin in BuiltinRoom::ALL {
+                if ui.button(tr.tr(builtin_room_message_id(builtin))).clicked() {
+                    let visible = self.scene.room.visible;
+                    self.scene.room = Room {
+                        visible,
+                        ..Room::builtin(builtin)
+                    };
+                }
+            }
         });
+        let room = &mut self.scene.room;
+        ui.checkbox(&mut room.visible, tr.tr("studio-room-visible"));
+        for (color, label) in [
+            (&mut room.floor_color, "studio-room-floor"),
+            (&mut room.backdrop_color, "studio-room-backdrop"),
+        ] {
+            ui.horizontal(|ui| {
+                let mut rgb = color.to_array();
+                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                    *color = glam::Vec3::from(rgb);
+                }
+                ui.label(tr.tr(label));
+            });
+        }
+        ui.add(
+            egui::Slider::new(&mut room.ambient_intensity, 0.0..=2.0).text(tr.tr("studio-ambient")),
+        );
     }
 
     fn lights_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
@@ -697,7 +722,8 @@ impl Studio {
         }
 
         let painter = ui.painter_at(rect);
-        let [r, g, b] = self.scene.background;
+        self.scene.keep_camera_above_floor();
+        let [r, g, b] = self.scene.room.backdrop_srgb();
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
         painter.add(eframe::egui_wgpu::Callback::new_paint_callback(
             rect,
@@ -706,6 +732,15 @@ impl Studio {
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);
+    }
+}
+
+/// Message id of a built-in room's name.
+fn builtin_room_message_id(room: BuiltinRoom) -> &'static str {
+    match room {
+        BuiltinRoom::Grey => "room-grey",
+        BuiltinRoom::White => "room-white",
+        BuiltinRoom::Dark => "room-dark",
     }
 }
 

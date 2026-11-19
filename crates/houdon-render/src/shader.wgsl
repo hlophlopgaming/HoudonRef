@@ -18,12 +18,10 @@ struct Light {
 
 struct Globals {
     view_proj: mat4x4<f32>,
-    // rgb: sky colour; a: ambient intensity.
+    // rgb: ambient colour from above (the backdrop); a: ambient intensity.
     sky_color: vec4<f32>,
-    // rgb: ground colour.
+    // rgb: ambient colour from below (the floor), the reflex.
     ground_color: vec4<f32>,
-    // rgb: surface albedo.
-    base_color: vec4<f32>,
     // x: number of lights; y: 1 if the output needs gamma encoding in the
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
@@ -36,6 +34,10 @@ struct ObjectUniforms {
     normal: mat4x4<f32>,
     // rgb: selection highlight colour; a: how much of it to mix in.
     highlight: vec4<f32>,
+    // rgb: surface colour below world height a.
+    color_below: vec4<f32>,
+    // rgb: surface colour above world height a.
+    color_above: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Globals;
@@ -87,7 +89,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
     }
     let ambient = mix(u.ground_color.rgb, u.sky_color.rgb, n.y * 0.5 + 0.5) * u.sky_color.a;
-    var color = u.base_color.rgb * (direct + ambient);
+    let blend = smoothstep(object.color_below.a, object.color_above.a, in.world_position.y);
+    let albedo = mix(object.color_below.rgb, object.color_above.rgb, blend);
+    var color = albedo * (direct + ambient);
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));

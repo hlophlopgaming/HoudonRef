@@ -32,8 +32,6 @@ studio-focal-length = Focal length
 studio-light-azimuth = Direction
 studio-light-elevation = Height
 studio-light-intensity = Intensity
-studio-ambient = Ambient
-studio-background = Background
 
 error-blend-file = .blend files cannot be opened directly yet. In Blender, use File → Export → glTF 2.0 (.glb) and open that file.
 error-unsupported-file = Unsupported file type: { $name }. Open a .glb or .gltf file.
@@ -71,3 +69,12 @@ studio-light-softness = Edge softness
 light-directional = Directional
 light-point = Point
 light-spot = Spot
+
+studio-room = Room
+studio-room-visible = Show floor and backdrop
+studio-room-floor = Floor
+studio-room-backdrop = Backdrop
+room-grey = Grey studio
+room-white = White studio
+room-dark = Dark studio
+studio-ambient = Ambient light

@@ -127,6 +127,22 @@ impl Model {
         Ok(model)
     }
 
+    /// A model from ready vertices (positions with their normals).
+    pub fn from_vertices(
+        name: impl Into<String>,
+        vertices: Vec<Vertex>,
+        indices: Vec<u32>,
+    ) -> Self {
+        let mut model = Self {
+            name: name.into(),
+            vertices,
+            indices,
+            bounds: Bounds::EMPTY,
+        };
+        model.recompute_bounds();
+        model
+    }
+
     /// A model from triangle positions, with smooth normals.
     pub fn from_mesh(name: impl Into<String>, positions: Vec<Vec3>, indices: Vec<u32>) -> Self {
         let normals = smooth_normals(&positions, &indices);

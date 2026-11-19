@@ -32,8 +32,6 @@ studio-focal-length = Фокусное расстояние
 studio-light-azimuth = Направление
 studio-light-elevation = Высота
 studio-light-intensity = Яркость
-studio-ambient = Заполняющий
-studio-background = Фон
 
 error-blend-file = Файлы .blend пока нельзя открыть напрямую. В Blender выберите File → Export → glTF 2.0 (.glb) и откройте получившийся файл.
 error-unsupported-file = Неподдерживаемый тип файла: { $name }. Откройте файл .glb или .gltf.
@@ -71,3 +69,12 @@ studio-light-softness = Мягкость края
 light-directional = Направленный
 light-point = Точечный
 light-spot = Прожектор
+
+studio-room = Окружение
+studio-room-visible = Показывать пол и задник
+studio-room-floor = Пол
+studio-room-backdrop = Задник
+room-grey = Серая студия
+room-white = Белая студия
+room-dark = Тёмная студия
+studio-ambient = Окружающий свет
