@@ -4,6 +4,8 @@ description = "HoudonRef: anatomy atlas, 3D reference studio and timed drawing a
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 default-run = "houdon-app"
 
 [dependencies]

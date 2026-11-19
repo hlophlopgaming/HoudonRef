@@ -164,9 +164,8 @@ impl Model {
     /// `origin + t * direction` (model space), or `None`.
     pub fn ray_hit(&self, origin: Vec3, direction: Vec3) -> Option<f32> {
         let mut nearest: Option<f32> = None;
-        for tri in self.indices.chunks_exact(3) {
-            let [a, b, c] =
-                [tri[0], tri[1], tri[2]].map(|i| Vec3::from(self.vertices[i as usize].position));
+        for tri in self.indices.as_chunks::<3>().0 {
+            let [a, b, c] = tri.map(|i| Vec3::from(self.vertices[i as usize].position));
             if let Some(t) = ray_triangle(origin, direction, a, b, c)
                 && nearest.is_none_or(|n| t < n)
             {
@@ -253,8 +252,8 @@ impl Model {
                     position: p.to_array(),
                     normal: n.to_array(),
                 }));
-            for tri in indices.chunks_exact(3) {
-                let (a, b, c) = (tri[0] + base, tri[1] + base, tri[2] + base);
+            for tri in indices.as_chunks::<3>().0 {
+                let [a, b, c] = tri.map(|i| i + base);
                 if flip_winding {
                     self.indices.extend([a, c, b]);
                 } else {
@@ -292,8 +291,8 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 /// Area-weighted vertex normals for meshes that come without normals.
 fn smooth_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
     let mut normals = vec![Vec3::ZERO; positions.len()];
-    for tri in indices.chunks_exact(3) {
-        let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| i as usize);
+    for tri in indices.as_chunks::<3>().0 {
+        let [a, b, c] = tri.map(|i| i as usize);
         let face = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
         normals[a] += face;
         normals[b] += face;

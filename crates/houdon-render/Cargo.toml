@@ -4,6 +4,8 @@ description = "3D viewport rendering for HoudonRef (wgpu, WebGL2 feature level)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 houdon-core.workspace = true
