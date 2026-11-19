@@ -42,7 +42,7 @@ Done:
 Next:
 
 - [ ] Light masks (#13), Solid mode with matcaps (#15), cavity (#16), contour lines and wireframe (#17).
-- [ ] Anti-aliasing: MSAA in the viewport, supersampled exports (#23).
+- [ ] Anti-aliasing: MSAA in the viewport, supersampled exports (#23); smooth shadow edges and per-light shadow softness (#24).
 - [ ] Scene files (#11), presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
