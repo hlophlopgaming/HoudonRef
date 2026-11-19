@@ -76,6 +76,11 @@ impl OffscreenRenderer {
         }
     }
 
+    /// How many times the shadow maps were redrawn so far.
+    pub fn shadow_map_builds(&self) -> u64 {
+        self.renderer.shadow_map_builds()
+    }
+
     /// Renders `frame` into a `width` × `height` picture.
     pub fn render(&mut self, frame: &Frame, width: u32, height: u32) -> Image {
         let size = wgpu::Extent3d {
@@ -106,13 +111,13 @@ impl OffscreenRenderer {
         let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer.prepare(&self.device, &self.queue, frame);
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("houdon_offscreen"),
             });
+        self.renderer
+            .prepare(&self.device, &self.queue, &mut encoder, frame);
         {
             let [r, g, b] = frame.clear_color().map(|c| f64::from(c) / 255.0);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

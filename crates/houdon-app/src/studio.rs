@@ -381,6 +381,10 @@ impl Studio {
             light.color = glam::Vec3::from(color);
             remove = ui.button(tr.tr("studio-light-remove")).clicked();
         });
+        ui.checkbox(
+            &mut light.casts_shadows,
+            tr.tr("studio-light-casts-shadows"),
+        );
         if light.kind != before.kind {
             let kind = light.kind;
             light.kind = before.kind;

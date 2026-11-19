@@ -12,8 +12,18 @@ struct Light {
     // xyz: direction the spot points; w: cosine of the outer half angle,
     // or -2 for lights without a cone.
     spot: vec4<f32>,
-    // x: cosine of the inner half angle.
+    // x: cosine of the inner half angle; y: first shadow view, or -1.
     spot_inner: vec4<f32>,
+};
+
+const MAX_SHADOW_VIEWS: u32 = 96u;
+
+struct Shadows {
+    view_proj: array<mat4x4<f32>, MAX_SHADOW_VIEWS>,
+    // xy: tile origin in atlas uv; z: tile size in uv.
+    tiles: array<vec4<f32>, MAX_SHADOW_VIEWS>,
+    // x: atlas size in texels.
+    params: vec4<f32>,
 };
 
 struct Globals {
@@ -42,6 +52,53 @@ struct ObjectUniforms {
 
 @group(0) @binding(0) var<uniform> u: Globals;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
+@group(2) @binding(0) var<uniform> shadows: Shadows;
+@group(2) @binding(1) var shadow_atlas: texture_depth_2d;
+@group(2) @binding(2) var shadow_sampler: sampler_comparison;
+
+// Pushes the looked-up point off the surface, metres, against shadow acne.
+const NORMAL_OFFSET: f32 = 0.02;
+
+// Which face of a point light's shadow cube looks towards `v`:
+// +X, -X, +Y, -Y, +Z, -Z.
+fn cube_face(v: vec3<f32>) -> u32 {
+    let a = abs(v);
+    if a.x >= a.y && a.x >= a.z {
+        return select(1u, 0u, v.x > 0.0);
+    }
+    if a.y >= a.z {
+        return select(3u, 2u, v.y > 0.0);
+    }
+    return select(5u, 4u, v.z > 0.0);
+}
+
+// How much of the light reaches `world`, 0 to 1, from one shadow view.
+// 3 x 3 filtered depth comparisons soften the edge; the comparison sampler
+// becomes a sampler2DShadow on WebGL2.
+fn lit_fraction(view: u32, world: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let clip = shadows.view_proj[view] * vec4<f32>(world + normal * NORMAL_OFFSET, 1.0);
+    if clip.w <= 0.0 {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || ndc.z > 1.0 || ndc.z < 0.0 {
+        return 1.0;
+    }
+    let tile = shadows.tiles[view];
+    let texel = 1.0 / shadows.params.x;
+    let uv = tile.xy + (ndc.xy * vec2<f32>(0.5, -0.5) + 0.5) * tile.z;
+    // Stay inside this view's tile, half a texel from its edge.
+    let low = tile.xy + vec2<f32>(texel * 1.5);
+    let high = tile.xy + vec2<f32>(tile.z - texel * 1.5);
+    var lit = 0.0;
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let at = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, low, high);
+            lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, at, ndc.z);
+        }
+    }
+    return lit / 9.0;
+}
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -85,6 +142,14 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
                 let cos_angle = dot(-to_light, light.spot.xyz);
                 attenuation *= smoothstep(light.spot.w, light.spot_inner.x, cos_angle);
             }
+        }
+        if light.spot_inner.y >= 0.0 {
+            var view = u32(light.spot_inner.y);
+            // A point light: positional and without a cone, six views.
+            if light.position.w > 0.5 && light.spot.w < -1.5 {
+                view += cube_face(in.world_position - light.position.xyz);
+            }
+            attenuation *= lit_fraction(view, in.world_position, n);
         }
         direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
     }

@@ -42,6 +42,8 @@ pub struct FrameObject {
     pub selected: bool,
     /// Drawn only from the side its normals face, like the room's inside.
     pub one_sided: bool,
+    /// Casts shadows; the room only receives them.
+    pub casts_shadows: bool,
 }
 
 /// Everything the renderer needs for one picture. Cheap to build every
@@ -81,6 +83,7 @@ impl Frame {
                         },
                         selected: false,
                         one_sided: true,
+                        casts_shadows: false,
                     }
                 });
         let objects = scene.objects().iter().filter_map(|object| {
@@ -92,6 +95,7 @@ impl Frame {
                 colors: ObjectColors::uniform(CLAY_COLOR),
                 selected: scene.selected() == Some(object.id),
                 one_sided: false,
+                casts_shadows: true,
             })
         });
         Self {

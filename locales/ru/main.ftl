@@ -81,3 +81,4 @@ studio-ambient = Окружающий свет
 studio-camera-direction = Направление
 studio-camera-height = Высота
 studio-camera-distance = Расстояние
+studio-light-casts-shadows = Отбрасывает тени
