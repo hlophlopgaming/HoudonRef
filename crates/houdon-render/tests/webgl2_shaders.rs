@@ -60,3 +60,15 @@ fn the_shadow_shader_runs_on_webgl2() {
         &[(naga::ShaderStage::Vertex, "vs_shadow")],
     );
 }
+
+#[test]
+fn the_composite_shader_runs_on_webgl2() {
+    assert_translates_for_webgl2(
+        "composite.wgsl",
+        include_str!("../src/composite.wgsl"),
+        &[
+            (naga::ShaderStage::Vertex, "vs_composite"),
+            (naga::ShaderStage::Fragment, "fs_composite"),
+        ],
+    );
+}

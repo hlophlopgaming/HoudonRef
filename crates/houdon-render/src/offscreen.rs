@@ -5,7 +5,6 @@ use egui_wgpu::wgpu;
 use crate::{Frame, SceneRenderer};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
 /// An RGBA picture, 8 bits per channel, sRGB, rows top to bottom.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +71,7 @@ impl OffscreenRenderer {
             &device,
             &queue,
             COLOR_FORMAT,
-            Some(DEPTH_FORMAT),
+            None,
             crate::DEFAULT_ATLAS_SIZE,
         );
         Self {
@@ -104,28 +103,22 @@ impl OffscreenRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let depth = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("houdon_offscreen_depth"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
         let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("houdon_offscreen"),
             });
-        self.renderer
-            .prepare(&self.device, &self.queue, &mut encoder, frame);
+        self.renderer.prepare(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            frame,
+            [width, height],
+        );
         {
-            let [r, g, b] = frame.clear_color().map(|c| f64::from(c) / 255.0);
+            // The composite covers every pixel; the clear only sets a start.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("houdon_offscreen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -133,18 +126,10 @@ impl OffscreenRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
                 ..Default::default()
             });
             self.renderer.draw(&mut pass);

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use houdon_core::{Light, Model, ModelId, Room, Scene, Surface};
+use houdon_core::{Light, Model, ModelId, Room, Scene, Surface, ValueStudy};
 
 /// The surface colour of an object, linear RGB. It changes with height
 /// from `below` to `above` between `from_y` and `to_y` (world space); the
@@ -70,6 +70,8 @@ pub struct Frame {
     pub eye: Vec3,
     /// The Clay colour, for parts without a material.
     pub clay_color: Vec3,
+    /// The value study laid over the picture.
+    pub value: ValueStudy,
 }
 
 impl Frame {
@@ -125,6 +127,7 @@ impl Frame {
             room,
             eye: scene.camera.eye(),
             clay_color: scene.shading.clay_color,
+            value: scene.shading.value,
         }
     }
 

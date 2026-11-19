@@ -7,6 +7,7 @@ use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
 use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
 
+use crate::composite::{Composite, SCENE_DEPTH_FORMAT};
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
 use crate::{Frame, FrameSurface, ObjectColors};
@@ -136,6 +137,7 @@ pub struct SceneRenderer {
     meshes: HashMap<ModelId, GpuMesh>,
     shadows: ShadowResources,
     materials: MaterialResources,
+    composite: Composite,
     /// The parts drawn by the last prepared frame, one uniform slot each.
     draw_list: Vec<DrawEntry>,
 }
@@ -205,7 +207,7 @@ impl SceneRenderer {
             &pipeline_layout,
             &shader,
             target_format,
-            depth_format,
+            Some(SCENE_DEPTH_FORMAT),
             None,
             "houdon_scene_pipeline",
         );
@@ -214,7 +216,7 @@ impl SceneRenderer {
             &pipeline_layout,
             &shader,
             target_format,
-            depth_format,
+            Some(SCENE_DEPTH_FORMAT),
             Some(wgpu::Face::Back),
             "houdon_one_sided_pipeline",
         );
@@ -253,6 +255,7 @@ impl SceneRenderer {
             gamma_encode: !target_format.is_srgb(),
             shadows,
             materials,
+            composite: Composite::new(device, target_format, depth_format),
             meshes: HashMap::new(),
             draw_list: Vec::new(),
         }
@@ -263,14 +266,16 @@ impl SceneRenderer {
         self.shadows.builds
     }
 
-    /// Uploads what `frame` needs and redraws the shadow maps into `encoder`
-    /// when needed. Call before [`Self::draw`] in the same frame.
+    /// Uploads what `frame` needs, redraws the shadow maps when needed and
+    /// renders the scene into its own `size` picture, all into `encoder`.
+    /// Call before [`Self::draw`] in the same frame.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
+        size: [u32; 2],
     ) {
         // Meshes and material textures: upload new models, drop models no
         // longer drawn.
@@ -394,10 +399,48 @@ impl SceneRenderer {
                     pass.draw_indexed(part_range(part), 0, 0..1);
                 }
             });
+
+        self.composite.prepare(device, queue, size, &frame.value);
+        let Some(target) = &self.composite.target else {
+            return;
+        };
+        // The backdrop colour behind everything, in the picture's encoding.
+        let [r, g, b] = if self.gamma_encode {
+            frame.clear_color().map(|c| f64::from(c) / 255.0)
+        } else {
+            frame.room.backdrop_color.to_array().map(f64::from)
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("houdon_scene_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &target.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        self.draw_scene(&mut pass);
     }
 
-    /// Draws the last prepared frame into `render_pass`.
+    /// Puts the last prepared picture into `render_pass`, as a value study
+    /// if one is on.
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        self.composite.draw(render_pass);
+    }
+
+    fn draw_scene(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
         render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
         for (i, entry) in self.draw_list.iter().enumerate() {
@@ -540,6 +583,8 @@ fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
 /// The Studio viewport for one egui frame.
 pub struct ViewportCallback {
     pub frame: Frame,
+    /// The viewport's size in physical pixels.
+    pub size: [u32; 2],
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {
@@ -552,7 +597,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         match callback_resources.get_mut::<SceneRenderer>() {
-            Some(renderer) => renderer.prepare(device, queue, egui_encoder, &self.frame),
+            Some(renderer) => renderer.prepare(device, queue, egui_encoder, &self.frame, self.size),
             None => log::error!("SceneRenderer::install was not called"),
         }
         Vec::new()

@@ -5,6 +5,7 @@
 //! the same renderer runs on weak desktops, in the browser and on Android
 //! (ADR 0001).
 
+mod composite;
 mod frame;
 mod material;
 #[cfg(not(target_arch = "wasm32"))]

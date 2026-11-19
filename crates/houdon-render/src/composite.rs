@@ -1,0 +1,240 @@
+//! The pass that puts the rendered scene on screen: as it is, or as a
+//! value study (squint, grey, tones). The scene is drawn into a picture of
+//! its own first, so this pass can read neighbouring pixels.
+
+use bytemuck::{Pod, Zeroable};
+use egui_wgpu::wgpu;
+use houdon_core::{ValueMode, ValueStudy};
+
+/// Depth buffer of the scene's own picture.
+pub const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
+
+/// The squint radius at full strength, as a share of the picture height.
+const SQUINT_SHARE: f32 = 0.03;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct ValueUniforms {
+    params: [f32; 4],
+    blur: [f32; 4],
+}
+
+/// The scene's picture and depth at the current size.
+pub struct SceneTarget {
+    pub size: [u32; 2],
+    pub color_view: wgpu::TextureView,
+    pub depth_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+}
+
+pub struct Composite {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    uniforms: wgpu::Buffer,
+    color_format: wgpu::TextureFormat,
+    pub target: Option<SceneTarget>,
+}
+
+impl Composite {
+    /// `color_format` is both the scene picture's and the output's format;
+    /// `output_depth` the depth format of the pass the picture is put into.
+    pub fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        output_depth: Option<wgpu::TextureFormat>,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("houdon_composite_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("houdon_composite_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(
+                            size_of::<ValueUniforms>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("houdon_composite_pipeline_layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("houdon_composite_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_composite"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            // The output pass may have a depth buffer (egui's); ignore it.
+            depth_stencil: output_depth.map(|format| wgpu::DepthStencilState {
+                format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_composite"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("houdon_composite_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("houdon_value_uniforms"),
+            size: size_of::<ValueUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            pipeline,
+            layout,
+            sampler,
+            uniforms,
+            color_format,
+            target: None,
+        }
+    }
+
+    /// Makes sure the scene picture has `size` and writes the value study.
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+        value: &ValueStudy,
+    ) {
+        let size = [size[0].max(1), size[1].max(1)];
+        if self.target.as_ref().is_none_or(|t| t.size != size) {
+            self.target = Some(self.create_target(device, size));
+        }
+        let (mode, tones) = match value.mode {
+            ValueMode::Off => (0.0, 0.0),
+            ValueMode::Grey => (1.0, 0.0),
+            ValueMode::Tones(n) => (
+                2.0,
+                f32::from(n.clamp(ValueMode::MIN_TONES, ValueMode::MAX_TONES)),
+            ),
+        };
+        let linear = if self.color_format.is_srgb() {
+            1.0
+        } else {
+            0.0
+        };
+        let radius = value.squint.clamp(0.0, 1.0) * SQUINT_SHARE * size[1] as f32;
+        let uniforms = ValueUniforms {
+            params: [mode, tones, value.balance.clamp(-1.0, 1.0), linear],
+            blur: [1.0 / size[0] as f32, 1.0 / size[1] as f32, radius, 0.0],
+        };
+        queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
+    }
+
+    /// Draws the scene picture, as a value study if one is on.
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(target) = &self.target {
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &target.bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    fn create_target(&self, device: &wgpu::Device, size: [u32; 2]) -> SceneTarget {
+        let extent = wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        };
+        let texture = |label, format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let color_view = texture(
+            "houdon_scene_picture",
+            self.color_format,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let depth_view = texture(
+            "houdon_scene_depth",
+            SCENE_DEPTH_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        );
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("houdon_composite_bind_group"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.uniforms.as_entire_binding(),
+                },
+            ],
+        });
+        SceneTarget {
+            size,
+            color_view,
+            depth_view,
+            bind_group,
+        }
+    }
+}

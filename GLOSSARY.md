@@ -95,3 +95,11 @@ _Avoid_: Outline (means silhouette only), edges, line art
 **Reflex**:
 Light bounced back into the shadow side of a form from the floor or nearby objects.
 _Avoid_: Bounce light, indirect light (in the interface)
+
+**Value study**:
+The picture reduced to lightness only, as grey or as 2 to 5 flat tones, optionally blurred by Squint, to judge the big masses of light and shadow.
+_Avoid_: Posterize, notan (in the interface), black and white
+
+**Squint**:
+A blur over the value study, like an artist half-closing their eyes to lose the details.
+_Avoid_: Blur (in the interface)

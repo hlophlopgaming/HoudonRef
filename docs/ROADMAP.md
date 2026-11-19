@@ -38,11 +38,11 @@ Done:
 - [x] Room: floor sweeping into the backdrop, built-in grey, white and dark studios (#6).
 - [x] glTF materials; colour from materials, Clay or Random (#7).
 - [x] Built-in reference heads: Asaro head and planar head.
+- [x] Value mode: 2 to 5 tones, grey and squint (#25).
 
 Next:
 
 - [ ] Light masks (#13), Solid mode with matcaps (#15), cavity (#16), contour lines and wireframe (#17).
-- [ ] Value mode: 2 to 5 tones, grey and squint (#25).
 - [ ] Anti-aliasing: MSAA in the viewport, supersampled exports (#23); smooth shadow edges and per-light shadow softness (#24).
 - [ ] Scene files (#11), presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.

@@ -18,5 +18,5 @@ pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
     MAX_LIGHTS, MIN_EYE_HEIGHT, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform,
 };
-pub use shading::{ColorSource, DEFAULT_CLAY_COLOR, Shading, Surface};
+pub use shading::{ColorSource, DEFAULT_CLAY_COLOR, Shading, Surface, ValueMode, ValueStudy};
 pub use units::{Length, LengthUnit, UnitSystem};

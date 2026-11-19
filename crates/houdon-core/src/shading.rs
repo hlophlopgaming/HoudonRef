@@ -29,6 +29,8 @@ pub struct Shading {
     pub color: ColorSource,
     /// The Clay tone, linear RGB.
     pub clay_color: Vec3,
+    /// A value study laid over the finished picture.
+    pub value: ValueStudy,
 }
 
 impl Default for Shading {
@@ -36,6 +38,79 @@ impl Default for Shading {
         Self {
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
+            value: ValueStudy::default(),
+        }
+    }
+}
+
+/// How the finished picture is turned into a value study.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ValueMode {
+    /// The picture as it is.
+    #[default]
+    Off,
+    /// Colour removed, lightness kept.
+    Grey,
+    /// Flat tones by lightness: 2 = light and shadow, 3 adds a half-tone,
+    /// 4 and 5 add highlights and accents.
+    Tones(u8),
+}
+
+impl ValueMode {
+    pub const MIN_TONES: u8 = 2;
+    pub const MAX_TONES: u8 = 5;
+}
+
+/// A value study: the way artists squint at a model to see the big masses
+/// of light and shadow before the details.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ValueStudy {
+    pub mode: ValueMode,
+    /// Moves where one tone turns into the next, -1 to 1: positive puts
+    /// more of the picture into the lighter tones.
+    pub balance: f32,
+    /// Blur like squinting, 0 (none) to 1 (strong).
+    pub squint: f32,
+    /// The mode `toggle` turns back on: the last one that was not `Off`.
+    pub last_mode: ValueMode,
+}
+
+impl ValueMode {
+    /// The study mode the toggle starts with: light, half-tone and shadow.
+    pub const DEFAULT_ON: Self = Self::Tones(3);
+}
+
+impl Default for ValueStudy {
+    fn default() -> Self {
+        Self {
+            mode: ValueMode::Off,
+            balance: 0.0,
+            squint: 0.0,
+            last_mode: ValueMode::DEFAULT_ON,
+        }
+    }
+}
+
+impl ValueStudy {
+    /// Whether the picture needs the value pass at all.
+    pub fn is_active(&self) -> bool {
+        self.mode != ValueMode::Off || self.squint > 0.0
+    }
+
+    /// Chooses a mode and remembers it for `toggle` unless it is `Off`.
+    pub fn set_mode(&mut self, mode: ValueMode) {
+        self.mode = mode;
+        if mode != ValueMode::Off {
+            self.last_mode = mode;
+        }
+    }
+
+    /// Turns the study off, or back on in the mode last used.
+    pub fn toggle(&mut self) {
+        if self.mode == ValueMode::Off {
+            self.mode = self.last_mode;
+        } else {
+            self.set_mode(ValueMode::Off);
         }
     }
 }
@@ -68,4 +143,31 @@ pub fn random_color(id: ObjectId) -> Vec3 {
     let m = value - c;
     // sRGB-ish to linear, near enough for a label colour.
     Vec3::new(r + m, g + m, b + m).powf(2.2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_toggle_brings_back_the_mode_last_used() {
+        let mut study = ValueStudy::default();
+        study.toggle();
+        assert_eq!(study.mode, ValueMode::DEFAULT_ON);
+
+        study.set_mode(ValueMode::Grey);
+        study.toggle();
+        assert_eq!(study.mode, ValueMode::Off);
+        study.toggle();
+        assert_eq!(study.mode, ValueMode::Grey);
+    }
+
+    #[test]
+    fn choosing_off_does_not_forget_the_last_mode() {
+        let mut study = ValueStudy::default();
+        study.set_mode(ValueMode::Tones(2));
+        study.set_mode(ValueMode::Off);
+        study.toggle();
+        assert_eq!(study.mode, ValueMode::Tones(2));
+    }
 }
