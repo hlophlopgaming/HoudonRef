@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use houdon_core::{Light, Model, ModelId, Room, Scene};
-
-use crate::CLAY_COLOR;
+use houdon_core::{Light, Model, ModelId, Room, Scene, Surface};
 
 /// The surface colour of an object, linear RGB. It changes with height
 /// from `below` to `above` between `from_y` and `to_y` (world space); the
@@ -30,6 +28,15 @@ impl ObjectColors {
     }
 }
 
+/// What covers a drawn object.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FrameSurface {
+    /// Plain colours, as for Clay, Random or the room.
+    Colors(ObjectColors),
+    /// The model's materials, part by part; parts without one are Clay.
+    Materials,
+}
+
 /// One object to draw.
 #[derive(Clone)]
 pub struct FrameObject {
@@ -37,7 +44,7 @@ pub struct FrameObject {
     pub model_id: ModelId,
     pub model: Arc<Model>,
     pub transform: Mat4,
-    pub colors: ObjectColors,
+    pub surface: FrameSurface,
     /// Drawn with the selection highlight.
     pub selected: bool,
     /// Drawn only from the side its normals face, like the room's inside.
@@ -59,6 +66,10 @@ pub struct Frame {
     pub light_centre: Vec3,
     /// The room's colours give the ambient light.
     pub room: Room,
+    /// Where the camera is, for highlights.
+    pub eye: Vec3,
+    /// The Clay colour, for parts without a material.
+    pub clay_color: Vec3,
 }
 
 impl Frame {
@@ -75,12 +86,12 @@ impl Frame {
                         model_id,
                         model,
                         transform: Mat4::IDENTITY,
-                        colors: ObjectColors {
+                        surface: FrameSurface::Colors(ObjectColors {
                             below: room.floor_color,
                             above: room.backdrop_color,
                             from_y: cove * 0.2,
                             to_y: cove,
-                        },
+                        }),
                         selected: false,
                         one_sided: true,
                         casts_shadows: false,
@@ -92,7 +103,10 @@ impl Frame {
                 model_id: object.model,
                 model: Arc::clone(model),
                 transform: scene.object_matrix(object),
-                colors: ObjectColors::uniform(CLAY_COLOR),
+                surface: match scene.surface(object) {
+                    Surface::Materials => FrameSurface::Materials,
+                    Surface::Plain(color) => FrameSurface::Colors(ObjectColors::uniform(color)),
+                },
                 selected: scene.selected() == Some(object.id),
                 one_sided: false,
                 casts_shadows: true,
@@ -109,6 +123,8 @@ impl Frame {
                 .collect(),
             light_centre: scene.light_centre(),
             room,
+            eye: scene.camera.eye(),
+            clay_color: scene.shading.clay_color,
         }
     }
 

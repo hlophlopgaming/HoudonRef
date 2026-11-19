@@ -1,6 +1,9 @@
-// Clay shader: up to 16 directional, point and spot lights plus a
-// sky/ground ambient term. Kept within the WebGL2 feature level: lights live
-// in a uniform array, no storage buffers, no compute.
+// Scene shader: metallic-roughness materials (or plain colours) under up to
+// 16 directional, point and spot lights with shadows, plus the room's
+// ambient light. Kept within the WebGL2 feature level: lights live in a
+// uniform array, no storage buffers, no compute.
+
+const PI: f32 = 3.14159265;
 
 const MAX_LIGHTS: u32 = 16u;
 
@@ -32,6 +35,8 @@ struct Globals {
     backdrop_color: vec4<f32>,
     // rgb: ambient colour from below (the floor), the reflex.
     floor_color: vec4<f32>,
+    // xyz: camera position.
+    eye: vec4<f32>,
     // x: number of lights; y: 1 if the output needs gamma encoding in the
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
@@ -40,21 +45,27 @@ struct Globals {
 
 struct ObjectUniforms {
     model: mat4x4<f32>,
-    // Inverse transpose of the model matrix, for normals.
     normal: mat4x4<f32>,
-    // rgb: selection highlight colour; a: how much of it to mix in.
     highlight: vec4<f32>,
-    // rgb: surface colour below world height a.
     color_below: vec4<f32>,
-    // rgb: surface colour above world height a.
     color_above: vec4<f32>,
+    base_color: vec4<f32>,
+    material: vec4<f32>,
 };
+// ObjectUniforms, per drawn part: model matrix; its inverse transpose for
+// normals; highlight (rgb, a = amount); plain colours below and above a
+// world height (in a); material base colour; material x = metallic,
+// y = roughness, z = 1 to use the material, w = normal map scale.
 
 @group(0) @binding(0) var<uniform> u: Globals;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
 @group(2) @binding(2) var shadow_sampler: sampler_comparison;
+@group(3) @binding(0) var base_color_texture: texture_2d<f32>;
+@group(3) @binding(1) var metallic_roughness_texture: texture_2d<f32>;
+@group(3) @binding(2) var normal_texture: texture_2d<f32>;
+@group(3) @binding(3) var material_sampler: sampler;
 
 // Pushes the looked-up point off the surface, metres, against shadow acne.
 const NORMAL_OFFSET: f32 = 0.02;
@@ -106,12 +117,14 @@ fn lit_fraction(view: u32, point: vec3<f32>) -> f32 {
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) world_position: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 @vertex
@@ -121,7 +134,41 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_position = u.view_proj * world;
     out.world_position = world.xyz;
     out.normal = (object.normal * vec4<f32>(in.normal, 0.0)).xyz;
+    out.uv = in.uv;
     return out;
+}
+
+// Bends `n` by a tangent-space normal from the normal map, with a tangent
+// frame worked out from screen-space derivatives (no tangents needed).
+// Returns `n` unchanged where the texture coordinates do not vary.
+fn perturb_normal(n: vec3<f32>, world: vec3<f32>, uv: vec2<f32>, mapped: vec3<f32>) -> vec3<f32> {
+    let dp1 = dpdx(world);
+    let dp2 = dpdy(world);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let size = max(dot(t, t), dot(b, b));
+    let frame = mat3x3<f32>(t * inverseSqrt(max(size, 1e-20)), b * inverseSqrt(max(size, 1e-20)), n);
+    return select(n, normalize(frame * mapped), size > 1e-20);
+}
+
+fn distribution_ggx(n_dot_h: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+fn geometry_smith(n_dot_v: f32, n_dot_l: f32, roughness: f32) -> f32 {
+    let k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    return (n_dot_v / (n_dot_v * (1.0 - k) + k)) * (n_dot_l / (n_dot_l * (1.0 - k) + k));
+}
+
+fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
+    return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
 @fragment
@@ -130,6 +177,26 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     if !front_facing {
         n = -n;
     }
+
+    // Textures and derivatives first, where control flow is still uniform.
+    let base_sample = textureSample(base_color_texture, material_sampler, in.uv);
+    let mr_sample = textureSample(metallic_roughness_texture, material_sampler, in.uv);
+    let normal_sample = textureSample(normal_texture, material_sampler, in.uv).xyz * 2.0 - 1.0;
+    let mapped = normalize(vec3<f32>(normal_sample.xy * object.material.w, normal_sample.z));
+    let bumped = perturb_normal(n, in.world_position, in.uv, mapped);
+
+    let use_material = object.material.z > 0.5;
+    let blend = smoothstep(object.color_below.a, object.color_above.a, in.world_position.y);
+    let plain = mix(object.color_below.rgb, object.color_above.rgb, blend);
+    let albedo = select(plain, object.base_color.rgb * base_sample.rgb, use_material);
+    let metallic = select(object.material.x, object.material.x * mr_sample.b, use_material);
+    let roughness = clamp(select(object.material.y, object.material.y * mr_sample.g, use_material), 0.04, 1.0);
+    n = select(n, bumped, use_material);
+
+    let v = normalize(u.eye.xyz - in.world_position);
+    let n_dot_v = max(dot(n, v), 1e-4);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+
     var direct = vec3<f32>(0.0);
     let count = min(u.params.x, MAX_LIGHTS);
     for (var i = 0u; i < count; i++) {
@@ -156,12 +223,20 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
             }
             attenuation *= lit_fraction(view, point);
         }
-        direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
+        let l = normalize(to_light);
+        let n_dot_l = max(dot(n, l), 0.0);
+        let h = normalize(l + v);
+        let f = fresnel_schlick(max(dot(h, v), 0.0), f0);
+        let specular = distribution_ggx(max(dot(n, h), 0.0), roughness)
+            * geometry_smith(n_dot_v, n_dot_l, roughness) * f
+            / (4.0 * n_dot_v * max(n_dot_l, 1e-4));
+        let diffuse = (1.0 - f) * (1.0 - metallic) * albedo;
+        // Diffuse keeps the old Lambert scale (no 1/pi), so specular gets pi.
+        direct += (diffuse + specular * PI) * light.color.rgb * attenuation * n_dot_l;
     }
-    let ambient = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
-    let blend = smoothstep(object.color_below.a, object.color_above.a, in.world_position.y);
-    let albedo = mix(object.color_below.rgb, object.color_above.rgb, blend);
-    var color = albedo * (direct + ambient);
+    let ambient_light = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
+    let ambient = ambient_light * ((1.0 - metallic) * albedo + f0 * (1.0 - roughness) * 0.5);
+    var color = direct + ambient;
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));

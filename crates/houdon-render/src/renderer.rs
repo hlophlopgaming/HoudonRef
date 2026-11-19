@@ -5,13 +5,14 @@ use std::collections::HashMap;
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
-use houdon_core::{Light, LightKind, MAX_LIGHTS, ModelId, Vertex};
+use houdon_core::{Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, Vertex};
 
-use crate::Frame;
+use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
+use crate::{Frame, FrameSurface, ObjectColors};
 
-/// Neutral light-grey clay, linear.
-pub const CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
+/// Roughness of plain colours (Clay, Random, the room): matte.
+const PLAIN_ROUGHNESS: f32 = 0.9;
 
 /// Colour mixed into a selected object, linear, and how much of it. A cool
 /// interface blue, so the highlight is not mistaken for a material.
@@ -25,6 +26,8 @@ struct Globals {
     backdrop_color: [f32; 4],
     /// rgb: ambient colour from below (the floor).
     floor_color: [f32; 4],
+    /// xyz: camera position.
+    eye: [f32; 4],
     /// x: number of lights; y: 1 if the output needs gamma encoding.
     params: [u32; 4],
     lights: [GpuLight; MAX_LIGHTS],
@@ -82,6 +85,8 @@ impl GpuLight {
     }
 }
 
+/// One draw: a part of an object. Mirrored by `ObjectUniforms` in both
+/// shaders (a test keeps them equal).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct ObjectUniforms {
@@ -89,16 +94,29 @@ struct ObjectUniforms {
     normal: [[f32; 4]; 4],
     /// rgb: highlight colour; a: how much of it to mix in.
     highlight: [f32; 4],
-    /// rgb: surface colour below `color_below.a` (world height).
+    /// rgb: plain surface colour below `color_below.a` (world height).
     color_below: [f32; 4],
-    /// rgb: surface colour above `color_above.a` (world height).
+    /// rgb: plain surface colour above `color_above.a` (world height).
     color_above: [f32; 4],
+    /// Material base colour factor, linear RGBA.
+    base_color: [f32; 4],
+    /// x: metallic; y: roughness; z: 1 to use the material, 0 for the
+    /// plain colours; w: normal map scale.
+    material: [f32; 4],
+}
+
+/// One part of one object, as drawn in the last prepared frame.
+struct DrawEntry {
+    model_id: ModelId,
+    part: MeshPart,
+    material: Option<(ModelId, usize)>,
+    one_sided: bool,
+    casts_shadows: bool,
 }
 
 pub(crate) struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    index_count: u32,
 }
 
 /// GPU resources for drawing frames. One renders the viewport (stored in
@@ -117,9 +135,9 @@ pub struct SceneRenderer {
     gamma_encode: bool,
     meshes: HashMap<ModelId, GpuMesh>,
     shadows: ShadowResources,
-    /// Model of each object drawn by the last prepared frame, and whether
-    /// it is drawn one-sided.
-    draw_list: Vec<(ModelId, bool)>,
+    materials: MaterialResources,
+    /// The parts drawn by the last prepared frame, one uniform slot each.
+    draw_list: Vec<DrawEntry>,
 }
 
 impl SceneRenderer {
@@ -131,6 +149,7 @@ impl SceneRenderer {
     ) {
         let renderer = Self::new(
             &render_state.device,
+            &render_state.queue,
             render_state.target_format,
             depth_format,
             crate::DEFAULT_ATLAS_SIZE,
@@ -146,6 +165,7 @@ impl SceneRenderer {
     /// side of the shadow atlas in texels.
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         target_format: wgpu::TextureFormat,
         depth_format: Option<wgpu::TextureFormat>,
         shadow_atlas_size: u32,
@@ -165,12 +185,14 @@ impl SceneRenderer {
         );
 
         let shadows = ShadowResources::new(device, &object_layout, shadow_atlas_size);
+        let materials = MaterialResources::new(device, queue);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("houdon_scene_pipeline_layout"),
             bind_group_layouts: &[
                 Some(&globals_layout),
                 Some(&object_layout),
                 Some(&shadows.layout),
+                Some(&materials.layout),
             ],
             immediate_size: 0,
         });
@@ -230,6 +252,7 @@ impl SceneRenderer {
             object_capacity,
             gamma_encode: !target_format.is_srgb(),
             shadows,
+            materials,
             meshes: HashMap::new(),
             draw_list: Vec::new(),
         }
@@ -249,17 +272,66 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
     ) {
-        // Meshes: upload new models, drop models no longer drawn.
-        self.meshes
-            .retain(|id, _| frame.objects.iter().any(|o| o.model_id == *id));
+        // Meshes and material textures: upload new models, drop models no
+        // longer drawn.
+        let drawn = |id: ModelId| frame.objects.iter().any(|o| o.model_id == id);
+        self.meshes.retain(|id, _| drawn(*id));
+        self.materials.retain(drawn);
         for object in &frame.objects {
             self.meshes
                 .entry(object.model_id)
                 .or_insert_with(|| upload_mesh(device, &object.model));
         }
 
-        // Per-object uniforms.
-        let count = frame.objects.len() as u64;
+        // One draw per part: its uniforms and its material.
+        let clay = ObjectColors::uniform(frame.clay_color);
+        let mut entries = Vec::new();
+        let mut uniforms = Vec::new();
+        for object in &frame.objects {
+            let model = &object.model;
+            for part in &model.parts {
+                let material = match object.surface {
+                    FrameSurface::Materials => part.material,
+                    FrameSurface::Colors(_) => None,
+                };
+                let colors = match object.surface {
+                    FrameSurface::Colors(colors) => colors,
+                    FrameSurface::Materials => clay,
+                };
+                let (base_color, material_params) = match material.map(|m| &model.materials[m]) {
+                    Some(m) => (
+                        m.base_color.to_array(),
+                        [m.metallic, m.roughness, 1.0, m.normal_scale],
+                    ),
+                    None => ([1.0; 4], [0.0, PLAIN_ROUGHNESS, 0.0, 1.0]),
+                };
+                if let Some(index) = material {
+                    self.materials
+                        .prepare(device, queue, object.model_id, model, index);
+                }
+                uniforms.push(ObjectUniforms {
+                    model: object.transform.to_cols_array_2d(),
+                    normal: object.transform.inverse().transpose().to_cols_array_2d(),
+                    highlight: if object.selected {
+                        SELECTION_COLOR
+                    } else {
+                        [0.0; 4]
+                    },
+                    color_below: colors.below.extend(colors.from_y).to_array(),
+                    color_above: colors.above.extend(colors.to_y).to_array(),
+                    base_color,
+                    material: material_params,
+                });
+                entries.push(DrawEntry {
+                    model_id: object.model_id,
+                    part: *part,
+                    material: material.map(|m| (object.model_id, m)),
+                    one_sided: object.one_sided,
+                    casts_shadows: object.casts_shadows,
+                });
+            }
+        }
+        let count = uniforms.len() as u64;
         if count > self.object_capacity {
             self.object_capacity = count.next_power_of_two();
             (self.object_buffer, self.object_bind_group) = object_resources(
@@ -270,30 +342,15 @@ impl SceneRenderer {
             );
         }
         let mut bytes = vec![0u8; (self.object_stride * count) as usize];
-        for (i, object) in frame.objects.iter().enumerate() {
-            let uniforms = ObjectUniforms {
-                model: object.transform.to_cols_array_2d(),
-                normal: object.transform.inverse().transpose().to_cols_array_2d(),
-                color_below: object.colors.below.extend(object.colors.from_y).to_array(),
-                color_above: object.colors.above.extend(object.colors.to_y).to_array(),
-                highlight: if object.selected {
-                    SELECTION_COLOR
-                } else {
-                    [0.0; 4]
-                },
-            };
+        for (i, slot) in uniforms.iter().enumerate() {
             let start = i * self.object_stride as usize;
             bytes[start..start + size_of::<ObjectUniforms>()]
-                .copy_from_slice(bytemuck::bytes_of(&uniforms));
+                .copy_from_slice(bytemuck::bytes_of(slot));
         }
         if !bytes.is_empty() {
             queue.write_buffer(&self.object_buffer, 0, &bytes);
         }
-        self.draw_list = frame
-            .objects
-            .iter()
-            .map(|o| (o.model_id, o.one_sided))
-            .collect();
+        self.draw_list = entries;
 
         let shadow_layout = ShadowLayout::new(frame);
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
@@ -313,27 +370,28 @@ impl SceneRenderer {
                 .extend(room.ambient_intensity)
                 .to_array(),
             floor_color: room.floor_color.extend(0.0).to_array(),
+            eye: frame.eye.extend(1.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
 
-        let casters: Vec<(usize, &GpuMesh)> = frame
-            .objects
+        let casters: Vec<(usize, &GpuMesh, MeshPart)> = self
+            .draw_list
             .iter()
             .enumerate()
-            .filter(|(_, o)| o.casts_shadows)
-            .filter_map(|(i, o)| Some((i, self.meshes.get(&o.model_id)?)))
+            .filter(|(_, entry)| entry.casts_shadows)
+            .filter_map(|(i, entry)| Some((i, self.meshes.get(&entry.model_id)?, entry.part)))
             .collect();
         let (object_bind_group, object_stride) = (&self.object_bind_group, self.object_stride);
         self.shadows
             .prepare(queue, encoder, frame, &shadow_layout, |pass| {
-                for (i, mesh) in &casters {
+                for (i, mesh, part) in &casters {
                     let offset = (*i as u64 * object_stride) as u32;
                     pass.set_bind_group(1, object_bind_group, &[offset]);
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    pass.draw_indexed(part_range(part), 0, 0..1);
                 }
             });
     }
@@ -342,22 +400,28 @@ impl SceneRenderer {
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
         render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
-        for (i, (id, one_sided)) in self.draw_list.iter().enumerate() {
-            let Some(mesh) = self.meshes.get(id) else {
+        for (i, entry) in self.draw_list.iter().enumerate() {
+            let Some(mesh) = self.meshes.get(&entry.model_id) else {
                 continue;
             };
-            render_pass.set_pipeline(if *one_sided {
+            render_pass.set_pipeline(if entry.one_sided {
                 &self.one_sided_pipeline
             } else {
                 &self.pipeline
             });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
+            render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            render_pass.draw_indexed(part_range(&entry.part), 0, 0..1);
         }
     }
+}
+
+/// The index range of a part.
+fn part_range(part: &MeshPart) -> std::ops::Range<u32> {
+    part.first_index..part.first_index + part.index_count
 }
 
 fn scene_pipeline(
@@ -378,7 +442,7 @@ fn scene_pipeline(
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
@@ -470,7 +534,6 @@ fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
             contents: bytemuck::cast_slice(&model.indices),
             usage: wgpu::BufferUsages::INDEX,
         }),
-        index_count: model.indices.len() as u32,
     }
 }
 
@@ -524,6 +587,24 @@ mod tests {
             crate::MAX_SHADOW_VIEWS
         );
         assert!(include_str!("shader.wgsl").contains(&declaration));
+    }
+
+    #[test]
+    fn both_shaders_agree_on_the_object_uniforms() {
+        let block = |source: &'static str| {
+            let start = source
+                .find("struct ObjectUniforms {")
+                .expect("the struct is declared");
+            let end = start + source[start..].find("};").expect("the struct ends");
+            source[start..end]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            block(include_str!("shader.wgsl")),
+            block(include_str!("shadow.wgsl"))
+        );
     }
 
     #[test]

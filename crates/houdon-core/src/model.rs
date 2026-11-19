@@ -1,7 +1,7 @@
 //! Static triangle meshes loaded from glTF.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3, Vec4};
 
 /// Default figure height in metres used when normalising human models.
 pub const DEFAULT_FIGURE_HEIGHT: f32 = 1.75;
@@ -61,12 +61,47 @@ impl Bounds {
     }
 }
 
-/// GPU-ready vertex: position and normal, both in model space.
+/// GPU-ready vertex: position and normal in model space, and the texture
+/// coordinates of the first set (zero when the model has none).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+/// A surface description in the glTF metallic-roughness model. Colours are
+/// linear; texture fields index [`Model::textures`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Material {
+    pub name: String,
+    /// Linear RGBA, multiplied with the base colour texture.
+    pub base_color: Vec4,
+    pub base_color_texture: Option<usize>,
+    pub metallic: f32,
+    pub roughness: f32,
+    /// Roughness in green, metalness in blue, multiplied with the factors.
+    pub metallic_roughness_texture: Option<usize>,
+    pub normal_texture: Option<usize>,
+    pub normal_scale: f32,
+}
+
+/// An image a material uses, decoded to 8-bit RGBA rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextureImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// A run of [`Model::indices`] drawn with one material: one glTF primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshPart {
+    pub first_index: u32,
+    pub index_count: u32,
+    /// Index into [`Model::materials`], or `None` for a part without one.
+    pub material: Option<usize>,
 }
 
 /// Errors that can happen while loading a model.
@@ -79,29 +114,35 @@ pub enum LoadError {
 }
 
 /// A static model: all triangle meshes of a glTF scene merged into one
-/// indexed mesh, with node transforms baked in.
+/// indexed mesh with node transforms baked in, split into parts by material.
 ///
-/// Skinned meshes are taken in their bind pose. Materials and textures are
-/// ignored for now: every model is drawn with the same neutral clay shader.
+/// Skinned meshes are taken in their bind pose.
 #[derive(Debug, Clone)]
 pub struct Model {
     pub name: String,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub bounds: Bounds,
+    pub parts: Vec<MeshPart>,
+    pub materials: Vec<Material>,
+    pub textures: Vec<TextureImage>,
 }
 
 impl Model {
     /// Loads a model from the bytes of a `.glb` file or a self-contained
     /// `.gltf` file (buffers embedded as data URIs).
     pub fn from_gltf_slice(name: impl Into<String>, bytes: &[u8]) -> Result<Self, LoadError> {
-        let (document, buffers, _images) = gltf::import_slice(bytes)?;
-        let mut model = Self {
-            name: name.into(),
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            bounds: Bounds::EMPTY,
-        };
+        let (document, buffers, images) = gltf::import_slice(bytes)?;
+        let mut model = Self::empty(name);
+        model.textures = images.iter().map(texture_image).collect();
+        // glTF material index -> ours; materials that set nothing are dropped.
+        let mut material_map = Vec::new();
+        for material in document.materials() {
+            material_map.push(Material::from_gltf(&material).map(|m| {
+                model.materials.push(m);
+                model.materials.len() - 1
+            }));
+        }
 
         let scene = document
             .default_scene()
@@ -109,13 +150,13 @@ impl Model {
         match scene {
             Some(scene) => {
                 for node in scene.nodes() {
-                    model.add_node(&node, Mat4::IDENTITY, &buffers);
+                    model.add_node(&node, Mat4::IDENTITY, &buffers, &material_map);
                 }
             }
             // No scene: take every mesh without transforms.
             None => {
                 for mesh in document.meshes() {
-                    model.add_mesh(&mesh, Mat4::IDENTITY, &buffers);
+                    model.add_mesh(&mesh, Mat4::IDENTITY, &buffers, &material_map);
                 }
             }
         }
@@ -127,20 +168,40 @@ impl Model {
         Ok(model)
     }
 
-    /// A model from ready vertices (positions with their normals).
+    fn empty(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            bounds: Bounds::EMPTY,
+            parts: Vec::new(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+        }
+    }
+
+    /// A model from ready vertices, as one part without a material.
     pub fn from_vertices(
         name: impl Into<String>,
         vertices: Vec<Vertex>,
         indices: Vec<u32>,
     ) -> Self {
-        let mut model = Self {
-            name: name.into(),
-            vertices,
-            indices,
-            bounds: Bounds::EMPTY,
-        };
+        let mut model = Self::empty(name);
+        model.parts = vec![MeshPart {
+            first_index: 0,
+            index_count: indices.len() as u32,
+            material: None,
+        }];
+        model.vertices = vertices;
+        model.indices = indices;
         model.recompute_bounds();
         model
+    }
+
+    /// Whether any part has a material of its own; models without are
+    /// shown as Clay.
+    pub fn has_materials(&self) -> bool {
+        self.parts.iter().any(|p| p.material.is_some())
     }
 
     /// A model from triangle positions, with smooth normals.
@@ -152,16 +213,10 @@ impl Model {
             .map(|(p, n)| Vertex {
                 position: p.to_array(),
                 normal: n.to_array(),
+                uv: [0.0; 2],
             })
             .collect();
-        let mut model = Self {
-            name: name.into(),
-            vertices,
-            indices,
-            bounds: Bounds::EMPTY,
-        };
-        model.recompute_bounds();
-        model
+        Self::from_vertices(name, vertices, indices)
     }
 
     /// Whether the model is shaped like a standing human body: at least
@@ -215,7 +270,13 @@ impl Model {
         self.bounds = Bounds::from_points(self.vertices.iter().map(|v| Vec3::from(v.position)));
     }
 
-    fn add_node(&mut self, node: &gltf::Node, parent: Mat4, buffers: &[gltf::buffer::Data]) {
+    fn add_node(
+        &mut self,
+        node: &gltf::Node,
+        parent: Mat4,
+        buffers: &[gltf::buffer::Data],
+        materials: &[Option<usize>],
+    ) {
         let world = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         if let Some(mesh) = node.mesh() {
             // The glTF spec says the transform of a skinned mesh node is ignored:
@@ -226,14 +287,20 @@ impl Model {
             } else {
                 world
             };
-            self.add_mesh(&mesh, mesh_transform, buffers);
+            self.add_mesh(&mesh, mesh_transform, buffers, materials);
         }
         for child in node.children() {
-            self.add_node(&child, world, buffers);
+            self.add_node(&child, world, buffers, materials);
         }
     }
 
-    fn add_mesh(&mut self, mesh: &gltf::Mesh, transform: Mat4, buffers: &[gltf::buffer::Data]) {
+    fn add_mesh(
+        &mut self,
+        mesh: &gltf::Mesh,
+        transform: Mat4,
+        buffers: &[gltf::buffer::Data],
+        materials: &[Option<usize>],
+    ) {
         let normal_matrix = Mat3::from_mat4(transform).inverse().transpose();
         let flip_winding = transform.determinant() < 0.0;
 
@@ -262,12 +329,27 @@ impl Model {
                 None => smooth_normals(&positions, &indices),
             };
 
+            let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
+                Some(uvs) => uvs.into_f32().collect(),
+                None => vec![[0.0; 2]; positions.len()],
+            };
+            if uvs.len() != positions.len() {
+                continue;
+            }
+
             let base = self.vertices.len() as u32;
-            self.vertices
-                .extend(positions.iter().zip(&normals).map(|(p, n)| Vertex {
-                    position: p.to_array(),
-                    normal: n.to_array(),
-                }));
+            let first_index = self.indices.len() as u32;
+            self.vertices.extend(
+                positions
+                    .iter()
+                    .zip(&normals)
+                    .zip(&uvs)
+                    .map(|((p, n), uv)| Vertex {
+                        position: p.to_array(),
+                        normal: n.to_array(),
+                        uv: *uv,
+                    }),
+            );
             for tri in indices.as_chunks::<3>().0 {
                 let [a, b, c] = tri.map(|i| i + base);
                 if flip_winding {
@@ -276,7 +358,120 @@ impl Model {
                     self.indices.extend([a, b, c]);
                 }
             }
+            let material = primitive
+                .material()
+                .index()
+                .and_then(|i| materials.get(i).copied().flatten());
+            self.parts.push(MeshPart {
+                first_index,
+                index_count: self.indices.len() as u32 - first_index,
+                material,
+            });
         }
+    }
+}
+
+impl Material {
+    /// Reads a glTF material, or `None` when it sets nothing beyond the
+    /// defaults (as Blender exports an untouched material): such parts are
+    /// shown as Clay rather than as the spec's default white metal.
+    fn from_gltf(material: &gltf::Material) -> Option<Self> {
+        let pbr = material.pbr_metallic_roughness();
+        let base_color_texture = pbr
+            .base_color_texture()
+            .map(|t| t.texture().source().index());
+        let metallic_roughness_texture = pbr
+            .metallic_roughness_texture()
+            .map(|t| t.texture().source().index());
+        let normal = material.normal_texture();
+        let sets_something = base_color_texture.is_some()
+            || metallic_roughness_texture.is_some()
+            || normal.is_some()
+            || pbr.base_color_factor() != [1.0; 4]
+            || pbr.metallic_factor() != 1.0
+            || pbr.roughness_factor() != 1.0;
+        sets_something.then(|| Self {
+            name: material.name().unwrap_or_default().to_owned(),
+            base_color: Vec4::from(pbr.base_color_factor()),
+            base_color_texture,
+            metallic: pbr.metallic_factor(),
+            roughness: pbr.roughness_factor(),
+            metallic_roughness_texture,
+            normal_scale: normal.as_ref().map_or(1.0, |n| n.scale()),
+            normal_texture: normal.map(|n| n.texture().source().index()),
+        })
+    }
+}
+
+/// A decoded glTF image as 8-bit RGBA, whatever its format.
+fn texture_image(image: &gltf::image::Data) -> TextureImage {
+    use gltf::image::Format;
+    let pixels = &image.pixels;
+    let count = (image.width * image.height) as usize;
+    let rgba = match image.format {
+        Format::R8G8B8A8 => pixels.clone(),
+        Format::R8G8B8 => pixels
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [r, g, b, 255])
+            .collect(),
+        Format::R8G8 => pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[r, g]| [r, g, 0, 255])
+            .collect(),
+        Format::R8 => pixels.iter().flat_map(|&v| [v, v, v, 255]).collect(),
+        // 16-bit images: keep the high byte of each little-endian channel.
+        Format::R16G16B16A16 => pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[_, high]| high)
+            .collect(),
+        Format::R16G16B16 => pixels
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .flat_map(|p| [p[1], p[3], p[5], 255])
+            .collect(),
+        Format::R16G16 => pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[1], p[3], 0, 255])
+            .collect(),
+        Format::R16 => pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|&[_, high]| [high, high, high, 255])
+            .collect(),
+        // Float images: clamp to 0..1 and scale to 8 bits.
+        Format::R32G32B32FLOAT | Format::R32G32B32A32FLOAT => {
+            let channels = if image.format == Format::R32G32B32FLOAT {
+                3
+            } else {
+                4
+            };
+            let values: Vec<u8> = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&bytes| (f32::from_le_bytes(bytes).clamp(0.0, 1.0) * 255.0).round() as u8)
+                .collect();
+            values
+                .chunks(channels)
+                .flat_map(|c| [c[0], c[1], c[2], if channels == 4 { c[3] } else { 255 }])
+                .collect()
+        }
+    };
+    debug_assert_eq!(rgba.len(), count * 4);
+    TextureImage {
+        width: image.width,
+        height: image.height,
+        rgba,
     }
 }
 
@@ -366,6 +561,49 @@ mod tests {
             assert!((b.size().y - DEFAULT_FIGURE_HEIGHT).abs() < 1e-4);
             assert!(b.min.y.abs() < 1e-5);
             assert!(b.center().x.abs() < 1e-4 && b.center().z.abs() < 1e-4);
+        }
+    }
+
+    const TWO_MATERIALS: &[u8] = include_bytes!("../../../assets/models/test/two_materials.glb");
+
+    #[test]
+    fn loads_materials_and_textures_per_part() {
+        let model = Model::from_gltf_slice("two", TWO_MATERIALS).unwrap();
+        assert!(model.has_materials());
+        assert_eq!(model.parts.len(), 2, "one part per glTF primitive");
+        assert_eq!(
+            model.parts.iter().map(|p| p.index_count).sum::<u32>() as usize,
+            model.indices.len()
+        );
+
+        let red = &model.materials[model.parts[0].material.unwrap()];
+        assert_eq!(red.name, "red");
+        assert!(red.base_color.x > 0.7 && red.base_color.y < 0.1);
+        assert!(red.base_color_texture.is_none());
+        assert!((red.roughness - 0.7).abs() < 1e-6 && red.metallic == 0.0);
+
+        let checker = &model.materials[model.parts[1].material.unwrap()];
+        let texture = &model.textures[checker.base_color_texture.expect("a base colour texture")];
+        assert_eq!((texture.width, texture.height), (4, 4));
+        assert_eq!(texture.rgba.len(), 4 * 4 * 4);
+        assert!(checker.normal_texture.is_some());
+        assert!((checker.metallic - 0.5).abs() < 1e-6);
+
+        let uv_spread = model
+            .vertices
+            .iter()
+            .map(|v| v.uv[0] + v.uv[1])
+            .fold(0.0f32, f32::max);
+        assert!(uv_spread > 1.0, "texture coordinates are loaded");
+    }
+
+    #[test]
+    fn a_material_that_sets_nothing_counts_as_none() {
+        // The test figures carry an empty "sculpture" material from Blender.
+        for bytes in [MALE, FEMALE] {
+            let model = Model::from_gltf_slice("figure", bytes).unwrap();
+            assert!(!model.has_materials());
+            assert_eq!(model.parts.len(), 1);
         }
     }
 

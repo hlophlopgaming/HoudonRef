@@ -163,6 +163,8 @@ impl RoomShape {
                 [left, right].map(|x| Vertex {
                     position: [x, p.y, p.z],
                     normal,
+                    // Floor and backdrop in metres, for textures later.
+                    uv: [x, p.z - p.y],
                 })
             })
             .collect::<Vec<_>>();

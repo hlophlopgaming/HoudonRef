@@ -82,3 +82,14 @@ studio-camera-direction = Направление
 studio-camera-height = Высота
 studio-camera-distance = Расстояние
 studio-light-casts-shadows = Отбрасывает тени
+
+studio-color-source = Цвет
+color-material = Материалы
+color-clay = Глина
+color-random = Случайный
+studio-clay-tone = Тон глины
+
+studio-add-asaro-head = Добавить голову Асаро
+studio-add-planar-head = Добавить планарную голову
+model-asaro-head = голова Асаро
+model-planar-head = планарная голова

@@ -54,3 +54,4 @@ cargo test --workspace
 - Planned anatomy data: [Écorché](https://github.com/Charleeh/ecorche) and [Z-Anatomy](https://www.z-anatomy.com/), both CC BY-SA 4.0. Anatomy content will ship as separate content packs under its own licence.
 - Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
 - Planned Studio content: matcaps from [Blender](https://github.com/blender/blender/tree/main/release/datafiles/studiolights/matcap) (CC0) and [Light Masks](https://kenney.nl/assets/light-masks) by Kenney (CC0).
+- Reference heads: *Asaro-head* by Ivan Chakir and *Planar head (Oleg Toropygin)* by BlueHorse, both CC BY 4.0. See [assets/models/heads/CREDITS.md](assets/models/heads/CREDITS.md).
