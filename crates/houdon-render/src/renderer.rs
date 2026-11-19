@@ -21,9 +21,9 @@ const SELECTION_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.35];
 struct Globals {
     view_proj: [[f32; 4]; 4],
     /// rgb: ambient colour from above (the backdrop); a: ambient intensity.
-    sky_color: [f32; 4],
+    backdrop_color: [f32; 4],
     /// rgb: ambient colour from below (the floor).
-    ground_color: [f32; 4],
+    floor_color: [f32; 4],
     /// x: number of lights; y: 1 if the output needs gamma encoding.
     params: [u32; 4],
     lights: [GpuLight; MAX_LIGHTS],
@@ -288,11 +288,11 @@ impl SceneRenderer {
         let room = &frame.room;
         let globals = Globals {
             view_proj: frame.view_proj.to_cols_array_2d(),
-            sky_color: room
+            backdrop_color: room
                 .backdrop_color
                 .extend(room.ambient_intensity)
                 .to_array(),
-            ground_color: room.floor_color.extend(0.0).to_array(),
+            floor_color: room.floor_color.extend(0.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
             lights,
         };

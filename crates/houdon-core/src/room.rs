@@ -102,13 +102,17 @@ impl RoomShape {
         let down = |v: f32| (v / STEP).floor() * STEP;
         let radius = objects.radius();
         let height = up(objects.max.y.max(0.0) * 1.5 + 1.0);
+        let cove_radius = up(height * 0.25);
+        // The flat floor must reach behind the objects: the cove starts
+        // only after a gap of at least its radius.
+        let gap = (radius * 0.5 + 0.5).max(cove_radius + 0.2);
         Self {
             centre_x: (objects.center().x / STEP).round() * STEP,
             half_width: up(objects.size().x * 0.5 + radius * 2.0 + 1.0),
-            back_z: down(objects.min.z - radius * 0.5 - 0.5),
+            back_z: down(objects.min.z - gap),
             front_z: up(objects.max.z + radius * 3.0 + 2.0),
             height,
-            cove_radius: up(height * 0.25),
+            cove_radius,
         }
     }
 
@@ -120,23 +124,36 @@ impl RoomShape {
             .cove_radius
             .min(self.height)
             .min(self.front_z - self.back_z);
-        let mut profile: Vec<(f32, f32, f32, f32)> = vec![(self.front_z, 0.0, 0.0, 1.0)];
+        /// A point of the profile: position and inward normal in (z, y).
+        struct ProfilePoint {
+            z: f32,
+            y: f32,
+            normal_z: f32,
+            normal_y: f32,
+        }
+        let point = |z, y, normal_z, normal_y| ProfilePoint {
+            z,
+            y,
+            normal_z,
+            normal_y,
+        };
+        let mut profile = vec![point(self.front_z, 0.0, 0.0, 1.0)];
         const COVE_STEPS: usize = 12;
         for i in 0..=COVE_STEPS {
             let angle = std::f32::consts::FRAC_PI_2 * i as f32 / COVE_STEPS as f32;
             let (sin, cos) = angle.sin_cos();
-            profile.push((self.back_z + r - r * sin, r - r * cos, sin, cos));
+            profile.push(point(self.back_z + r - r * sin, r - r * cos, sin, cos));
         }
-        profile.push((self.back_z, self.height, 1.0, 0.0));
+        profile.push(point(self.back_z, self.height, 1.0, 0.0));
 
         let left = self.centre_x - self.half_width;
         let right = self.centre_x + self.half_width;
         let vertices = profile
             .iter()
-            .flat_map(|&(z, y, nz, ny)| {
-                let normal = [0.0, ny, nz];
+            .flat_map(|p| {
+                let normal = [0.0, p.normal_y, p.normal_z];
                 [left, right].map(|x| Vertex {
-                    position: [x, y, z],
+                    position: [x, p.y, p.z],
                     normal,
                 })
             })
@@ -188,6 +205,21 @@ mod tests {
         assert!(b.min.x <= objects.min.x && b.max.x >= objects.max.x);
         assert!(b.min.z <= objects.min.z && b.max.z >= objects.max.z);
         assert!(b.max.y >= objects.max.y);
+    }
+
+    #[test]
+    fn the_cove_starts_behind_even_large_objects() {
+        for size in [0.2, 2.0, 10.0, 40.0] {
+            let objects = Bounds::from_points([
+                Vec3::new(-size, 0.0, -size),
+                Vec3::new(size, size * 2.0, size),
+            ]);
+            let shape = RoomShape::around(&objects);
+            assert!(
+                shape.back_z + shape.cove_radius <= objects.min.z,
+                "size {size}: {shape:?}"
+            );
+        }
     }
 
     #[test]

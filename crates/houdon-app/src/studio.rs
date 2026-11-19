@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::{
     BuiltinRoom, LengthUnit, Light, LightId, LightKind, LoadError, MAX_LIGHTS, Model, ModelId,
-    OrbitCamera, PLAUSIBLE_SIZE, Room, Scene, UnitSystem,
+    OrbitCamera, PLAUSIBLE_SIZE, Scene, UnitSystem,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{Frame, ViewportCallback};
@@ -245,11 +245,7 @@ impl Studio {
         ui.horizontal_wrapped(|ui| {
             for builtin in BuiltinRoom::ALL {
                 if ui.button(tr.tr(builtin_room_message_id(builtin))).clicked() {
-                    let visible = self.scene.room.visible;
-                    self.scene.room = Room {
-                        visible,
-                        ..Room::builtin(builtin)
-                    };
+                    self.scene.use_builtin_room(builtin);
                 }
             }
         });

@@ -65,8 +65,8 @@ impl Frame {
             room.visible
                 .then(|| scene.room_model())
                 .flatten()
-                .map(|(model_id, model)| {
-                    let cove = scene.room_shape().cove_radius;
+                .map(|(model_id, model, shape)| {
+                    let cove = shape.cove_radius;
                     FrameObject {
                         model_id,
                         model,

@@ -450,18 +450,26 @@ impl Scene {
 
     /// The room's floor-to-backdrop mesh around the current objects, with an
     /// id that stays the same while the room's shape does.
-    pub fn room_model(&self) -> Option<(ModelId, Arc<Model>)> {
-        let shape = RoomShape::around(&self.bounds());
+    pub fn room_model(&self) -> Option<(ModelId, Arc<Model>, RoomShape)> {
+        let shape = self.room_shape();
         let mut cache = self.room_cache.lock().ok()?;
         if let Some((cached, id, model)) = cache.as_ref()
             && *cached == shape
         {
-            return Some((*id, Arc::clone(model)));
+            return Some((*id, Arc::clone(model), shape));
         }
         let model = Arc::new(shape.mesh());
         let id = ModelId::next();
         *cache = Some((shape, id, Arc::clone(&model)));
-        Some((id, model))
+        Some((id, model, shape))
+    }
+
+    /// Switches to a built-in room, keeping whether floor and backdrop are shown.
+    pub fn use_builtin_room(&mut self, builtin: crate::BuiltinRoom) {
+        self.room = Room {
+            visible: self.room.visible,
+            ..Room::builtin(builtin)
+        };
     }
 
     /// Lifts the camera back above the floor if it went under it, by
@@ -958,6 +966,18 @@ mod tests {
     }
 
     #[test]
+    fn switching_built_in_rooms_changes_the_colours_and_keeps_visibility() {
+        let mut scene = Scene::new();
+        scene.room.visible = false;
+        scene.use_builtin_room(crate::BuiltinRoom::White);
+        let white = scene.room;
+        scene.use_builtin_room(crate::BuiltinRoom::Dark);
+        assert!(white.backdrop_color.x > scene.room.backdrop_color.x);
+        assert!(white.floor_color.x > scene.room.floor_color.x);
+        assert!(!scene.room.visible);
+    }
+
+    #[test]
     fn the_camera_stays_above_a_visible_floor() {
         let (mut scene, _, _, _) = two_figure_scene();
         scene.frame_camera(1.5);
@@ -984,11 +1004,11 @@ mod tests {
     #[test]
     fn the_room_mesh_surrounds_the_objects_and_is_reused() {
         let (scene, _, _, _) = two_figure_scene();
-        let (id, room) = scene.room_model().expect("a scene with objects has a room");
+        let (id, room, _) = scene.room_model().expect("a scene with objects has a room");
         let objects = scene.bounds();
         assert!(room.bounds.min.x <= objects.min.x && room.bounds.max.x >= objects.max.x);
         assert!(room.bounds.min.z <= objects.min.z);
-        let (again, _) = scene.room_model().unwrap();
+        let (again, _, _) = scene.room_model().unwrap();
         assert_eq!(id, again, "the same room is not rebuilt");
     }
 

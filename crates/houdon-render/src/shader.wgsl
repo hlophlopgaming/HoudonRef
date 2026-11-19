@@ -19,9 +19,9 @@ struct Light {
 struct Globals {
     view_proj: mat4x4<f32>,
     // rgb: ambient colour from above (the backdrop); a: ambient intensity.
-    sky_color: vec4<f32>,
+    backdrop_color: vec4<f32>,
     // rgb: ambient colour from below (the floor), the reflex.
-    ground_color: vec4<f32>,
+    floor_color: vec4<f32>,
     // x: number of lights; y: 1 if the output needs gamma encoding in the
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
@@ -88,7 +88,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         }
         direct += max(dot(n, normalize(to_light)), 0.0) * light.color.rgb * attenuation;
     }
-    let ambient = mix(u.ground_color.rgb, u.sky_color.rgb, n.y * 0.5 + 0.5) * u.sky_color.a;
+    let ambient = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
     let blend = smoothstep(object.color_below.a, object.color_above.a, in.world_position.y);
     let albedo = mix(object.color_below.rgb, object.color_above.rgb, blend);
     var color = albedo * (direct + ambient);
