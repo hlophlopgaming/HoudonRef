@@ -37,7 +37,7 @@ Done:
 - [x] Up to 16 directional, point and spot lights (#5), with shadows (#12).
 - [x] Room: floor sweeping into the backdrop, built-in grey, white and dark studios (#6).
 - [x] glTF materials; colour from materials, Clay or Random (#7).
-- [x] Built-in reference heads: Asaro head and planar head.
+- [x] Built-in reference heads: Asaro head, planar head, base head and Wolfsaro (canine) head.
 - [x] Value mode: 2 to 5 tones, grey and squint (#25).
 - [x] Anti-aliasing: 4× MSAA in the viewport, supersampled offscreen pictures (#23).
 

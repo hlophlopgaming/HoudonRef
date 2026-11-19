@@ -107,3 +107,7 @@ studio-add-asaro-head = Добавить голову Асаро
 studio-add-planar-head = Добавить планарную голову
 model-asaro-head = голова Асаро
 model-planar-head = планарная голова
+studio-add-base-head = Добавить базовую голову
+model-base-head = базовая голова
+studio-add-wolfsaro-head = Добавить голову волка (Wolfsaro)
+model-wolfsaro-head = голова волка

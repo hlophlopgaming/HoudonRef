@@ -103,3 +103,7 @@ studio-add-asaro-head = Add Asaro head
 studio-add-planar-head = Add planar head
 model-asaro-head = Asaro head
 model-planar-head = planar head
+studio-add-base-head = Add base head
+model-base-head = base head
+studio-add-wolfsaro-head = Add Wolfsaro head (canine)
+model-wolfsaro-head = Wolfsaro head

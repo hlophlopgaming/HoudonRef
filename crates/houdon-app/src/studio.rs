@@ -16,6 +16,8 @@ const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
 const ASARO_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/asaro_head.glb");
 const PLANAR_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/planar_head.glb");
+const BASE_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/base_head.glb");
+const WOLFSARO_HEAD_GLB: &[u8] = include_bytes!("../../../assets/models/heads/wolfsaro_head.glb");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Builtin {
@@ -23,10 +25,19 @@ enum Builtin {
     Female,
     AsaroHead,
     PlanarHead,
+    BaseHead,
+    WolfsaroHead,
 }
 
 impl Builtin {
-    const ALL: [Self; 4] = [Self::Male, Self::Female, Self::AsaroHead, Self::PlanarHead];
+    const ALL: [Self; 6] = [
+        Self::Male,
+        Self::Female,
+        Self::AsaroHead,
+        Self::PlanarHead,
+        Self::BaseHead,
+        Self::WolfsaroHead,
+    ];
 
     fn name_and_bytes(self) -> (&'static str, &'static [u8]) {
         match self {
@@ -34,6 +45,8 @@ impl Builtin {
             Self::Female => ("female", FEMALE_GLB),
             Self::AsaroHead => ("asaro-head", ASARO_HEAD_GLB),
             Self::PlanarHead => ("planar-head", PLANAR_HEAD_GLB),
+            Self::BaseHead => ("base-head", BASE_HEAD_GLB),
+            Self::WolfsaroHead => ("wolfsaro-head", WOLFSARO_HEAD_GLB),
         }
     }
 
@@ -45,6 +58,11 @@ impl Builtin {
             // Life-size heads on their stands.
             Self::AsaroHead => Some(0.32),
             Self::PlanarHead => Some(0.32),
+            // Head and neck, no stand.
+            Self::BaseHead => Some(0.3),
+            // A bust: head, ears, shoulders and pedestal, the head itself
+            // life-size next to a human one.
+            Self::WolfsaroHead => Some(0.6),
         }
     }
 
@@ -64,6 +82,8 @@ impl Builtin {
             Self::Female => "studio-add-female",
             Self::AsaroHead => "studio-add-asaro-head",
             Self::PlanarHead => "studio-add-planar-head",
+            Self::BaseHead => "studio-add-base-head",
+            Self::WolfsaroHead => "studio-add-wolfsaro-head",
         }
     }
 
@@ -79,6 +99,8 @@ impl Builtin {
             Self::Female => "model-female-figure",
             Self::AsaroHead => "model-asaro-head",
             Self::PlanarHead => "model-planar-head",
+            Self::BaseHead => "model-base-head",
+            Self::WolfsaroHead => "model-wolfsaro-head",
         }
     }
 }
@@ -1029,7 +1051,13 @@ mod tests {
     #[test]
     fn built_in_models_stand_right_next_to_the_others() {
         let mut studio = Studio::new();
-        for builtin in [Builtin::AsaroHead, Builtin::PlanarHead, Builtin::Female] {
+        for builtin in [
+            Builtin::AsaroHead,
+            Builtin::PlanarHead,
+            Builtin::BaseHead,
+            Builtin::WolfsaroHead,
+            Builtin::Female,
+        ] {
             let before = studio.scene.bounds();
             studio.add_builtin(builtin);
             let id = studio.scene.selected().unwrap();
