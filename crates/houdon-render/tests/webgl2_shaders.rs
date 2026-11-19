@@ -57,7 +57,10 @@ fn the_shadow_shader_runs_on_webgl2() {
     assert_translates_for_webgl2(
         "shadow.wgsl",
         include_str!("../src/shadow.wgsl"),
-        &[(naga::ShaderStage::Vertex, "vs_shadow")],
+        &[
+            (naga::ShaderStage::Vertex, "vs_shadow"),
+            (naga::ShaderStage::Fragment, "fs_shadow"),
+        ],
     );
 }
 

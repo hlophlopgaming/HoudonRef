@@ -4,6 +4,11 @@
 //! (the faces of a cube). More lights mean smaller tiles: the atlas is the
 //! shadow budget. The atlas is only redrawn when a light or a caster
 //! changes, never because the camera moved.
+//!
+//! Next to the depth atlas, the shadow pass writes the same depths into a
+//! colour atlas (packed into RGBA8). The scene shader reads raw depths from
+//! it to find how far the casters are, which sets how wide a soft shadow's
+//! penumbra is; WebGL2 cannot read raw depths from the depth atlas itself.
 
 use std::hash::{Hash, Hasher};
 
@@ -23,6 +28,22 @@ pub const DEFAULT_ATLAS_SIZE: u32 = 2048;
 
 pub const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// The colour atlas of raw depths, packed into four 8-bit channels:
+/// renderable on every WebGL2 device, unlike float colour formats.
+pub const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// One shadow view of a light.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightView {
+    pub view_proj: Mat4,
+    /// What the shader needs to turn depths and texels into metres:
+    /// x near and y far plane; z the half width of an orthographic view
+    /// (> 0) or minus the tangent of half a perspective view's field of
+    /// view (< 0); w the light's size: its angle across, radians, for a
+    /// directional light, its width in metres for the others.
+    pub lens: [f32; 4],
+}
+
 /// Directions of a point light's cube faces, in the order the shader picks
 /// them: +X, -X, +Y, -Y, +Z, -Z; each with an up vector.
 const CUBE_FACES: [(Vec3, Vec3); 6] = [
@@ -35,8 +56,9 @@ const CUBE_FACES: [(Vec3, Vec3); 6] = [
 ];
 
 /// The light views of one light, from the light towards the casters.
-pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<Mat4> {
+pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<LightView> {
     let radius = casters.radius().max(0.05);
+    let angle = light.shadow_angle();
     match light.kind {
         LightKind::Directional => {
             let target = casters.center();
@@ -47,11 +69,12 @@ pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<Mat4> {
             } else {
                 Vec3::Y
             };
-            let far = radius * 4.0 + 2.0;
-            vec![
-                directx::orthographic(-radius, radius, -radius, radius, 0.01, far)
+            let (near, far) = (0.01, radius * 4.0 + 2.0);
+            vec![LightView {
+                view_proj: directx::orthographic(-radius, radius, -radius, radius, near, far)
                     * view::look_at_mat4(eye, target, up),
-            ]
+                lens: [near, far, radius, angle],
+            }]
         }
         LightKind::Spot => {
             let position = light.position(centre);
@@ -62,19 +85,24 @@ pub fn light_views(light: &Light, centre: Vec3, casters: &Bounds) -> Vec<Mat4> {
                 Vec3::Y
             };
             let fov = (light.cone_angle * 1.05).clamp(0.05, 3.0);
-            let far = light.distance + radius * 2.0 + 10.0;
-            vec![
-                directx::perspective(fov, 1.0, 0.05, far)
+            let (near, far) = (0.05, light.distance + radius * 2.0 + 10.0);
+            vec![LightView {
+                view_proj: directx::perspective(fov, 1.0, near, far)
                     * view::look_at_mat4(position, centre, up),
-            ]
+                lens: [near, far, -(fov * 0.5).tan(), angle * light.distance],
+            }]
         }
         LightKind::Point => {
             let position = light.position(centre);
-            let far = reach(position, casters);
-            let projection = directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, 0.05, far);
+            let (near, far) = (0.05, reach(position, casters));
+            let projection = directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far);
             CUBE_FACES
                 .iter()
-                .map(|&(forward, up)| projection * view::look_to_mat4(position, forward, up))
+                .map(|&(forward, up)| LightView {
+                    view_proj: projection * view::look_to_mat4(position, forward, up),
+                    // tan(45°) = 1: a cube face sees 90 degrees.
+                    lens: [near, far, -1.0, angle * light.distance],
+                })
                 .collect()
         }
     }
@@ -101,6 +129,8 @@ pub struct ShadowUniforms {
     pub view_proj: [[[f32; 4]; 4]; MAX_SHADOW_VIEWS],
     /// xy: tile origin in atlas uv; z: tile size in uv; w unused.
     pub tiles: [[f32; 4]; MAX_SHADOW_VIEWS],
+    /// Each view's [`LightView::lens`].
+    pub lens: [[f32; 4]; MAX_SHADOW_VIEWS],
     /// x: atlas size in texels.
     pub params: [f32; 4],
 }
@@ -109,7 +139,7 @@ pub struct ShadowUniforms {
 pub struct ShadowLayout {
     /// For each light of the frame, its first view, or `None` without shadows.
     pub first_view: Vec<Option<u32>>,
-    pub views: Vec<Mat4>,
+    pub views: Vec<LightView>,
 }
 
 impl ShadowLayout {
@@ -135,7 +165,8 @@ impl ShadowLayout {
         let mut uniforms = ShadowUniforms::zeroed();
         let texel = 1.0 / atlas_size as f32;
         for (i, view) in self.views.iter().enumerate().take(MAX_SHADOW_VIEWS) {
-            uniforms.view_proj[i] = view.to_cols_array_2d();
+            uniforms.view_proj[i] = view.view_proj.to_cols_array_2d();
+            uniforms.lens[i] = view.lens;
             let (x, y, size) = tile_rect(i as u32, self.views.len(), atlas_size);
             uniforms.tiles[i] = [x as f32 * texel, y as f32 * texel, size as f32 * texel, 0.0];
         }
@@ -149,7 +180,7 @@ impl ShadowLayout {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         atlas_size.hash(&mut hasher);
         for view in &self.views {
-            bytemuck::cast_slice::<f32, u8>(&view.to_cols_array()).hash(&mut hasher);
+            bytemuck::cast_slice::<f32, u8>(&view.view_proj.to_cols_array()).hash(&mut hasher);
         }
         for object in frame.objects.iter().filter(|o| o.casts_shadows) {
             object.model_id.hash(&mut hasher);
@@ -186,6 +217,7 @@ pub struct ShadowResources {
     pub bind_group: wgpu::BindGroup,
     uniforms_buffer: wgpu::Buffer,
     atlas_view: wgpu::TextureView,
+    depth_copy_view: wgpu::TextureView,
     atlas_size: u32,
     view_buffer: wgpu::Buffer,
     view_bind_group: wgpu::BindGroup,
@@ -219,6 +251,23 @@ impl ShadowResources {
             view_formats: &[],
         });
         let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth_copy_view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("houdon_shadow_depth_copy"),
+                size: wgpu::Extent3d {
+                    width: atlas_size,
+                    height: atlas_size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_COPY_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let uniforms_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_shadow_uniforms"),
@@ -257,6 +306,16 @@ impl ShadowResources {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         // Lit where the surface is no farther than the nearest caster;
@@ -285,6 +344,10 @@ impl ShadowResources {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&depth_copy_view),
                 },
             ],
         });
@@ -364,7 +427,16 @@ impl ShadowResources {
                 },
             }),
             multisample: wgpu::MultisampleState::default(),
-            fragment: None,
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_shadow"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: DEPTH_COPY_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
             multiview_mask: None,
             cache: None,
         });
@@ -374,6 +446,7 @@ impl ShadowResources {
             bind_group,
             uniforms_buffer,
             atlas_view,
+            depth_copy_view,
             atlas_size,
             view_buffer,
             view_bind_group,
@@ -410,13 +483,23 @@ impl ShadowResources {
         let mut views = vec![0u8; (self.view_stride * MAX_SHADOW_VIEWS as u64) as usize];
         for (i, view) in layout.views.iter().enumerate().take(MAX_SHADOW_VIEWS) {
             let start = i * self.view_stride as usize;
-            views[start..start + 64].copy_from_slice(bytemuck::cast_slice(&view.to_cols_array()));
+            views[start..start + 64]
+                .copy_from_slice(bytemuck::cast_slice(&view.view_proj.to_cols_array()));
         }
         queue.write_buffer(&self.view_buffer, 0, &views);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("houdon_shadow_pass"),
-            color_attachments: &[],
+            // Cleared to the farthest depth, as the depth atlas.
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.depth_copy_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.atlas_view,
                 depth_ops: Some(wgpu::Operations {

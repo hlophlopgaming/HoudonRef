@@ -520,6 +520,13 @@ impl Studio {
             &mut light.casts_shadows,
             tr.tr("studio-light-casts-shadows"),
         );
+        if light.casts_shadows {
+            ui.add(
+                egui::Slider::new(&mut light.shadow_softness, 0.0..=1.0)
+                    .text(tr.tr("studio-light-shadow-softness")),
+            )
+            .on_hover_text(tr.tr("studio-light-shadow-softness-hint"));
+        }
         if light.kind != before.kind {
             let kind = light.kind;
             light.kind = before.kind;

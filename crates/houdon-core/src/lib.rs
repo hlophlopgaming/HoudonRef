@@ -12,7 +12,7 @@ pub mod shading;
 pub mod units;
 
 pub use camera::OrbitCamera;
-pub use light::{Light, LightId, LightKind};
+pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
 pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
