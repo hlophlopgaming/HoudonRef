@@ -8,6 +8,7 @@ use glam::Vec3;
 use houdon_core::{Light, LightKind, MAX_LIGHTS, ModelId, Vertex};
 
 use crate::Frame;
+use crate::shadow::{ShadowLayout, ShadowResources};
 
 /// Neutral light-grey clay, linear.
 pub const CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
@@ -32,6 +33,9 @@ struct Globals {
 /// `spot.w` of a light without a cone; the shader tests `spot.w > -1.5`.
 const NO_CONE: f32 = -2.0;
 
+/// `spot_inner.y` of a light without shadows; otherwise its first shadow view.
+const NO_SHADOW: f32 = -1.0;
+
 /// One light as the shader sees it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -43,28 +47,29 @@ struct GpuLight {
     /// xyz: direction the spot points; w: cosine of the outer half angle,
     /// or -2 for lights without a cone.
     spot: [f32; 4],
-    /// x: cosine of the inner half angle.
+    /// x: cosine of the inner half angle; y: first shadow view, or -1.
     spot_inner: [f32; 4],
 }
 
 impl GpuLight {
-    fn new(light: &Light, centre: Vec3) -> Self {
+    fn new(light: &Light, centre: Vec3, first_shadow_view: Option<u32>) -> Self {
+        let shadow = first_shadow_view.map_or(NO_SHADOW, |v| v as f32);
         let color = (light.color * light.intensity).extend(0.0).to_array();
         match light.kind {
             LightKind::Directional => Self {
                 position: light.direction().extend(0.0).to_array(),
                 color,
                 spot: [0.0, 0.0, 0.0, NO_CONE],
-                spot_inner: [0.0; 4],
+                spot_inner: [0.0, shadow, 0.0, 0.0],
             },
             LightKind::Point | LightKind::Spot => {
                 let position = light.position(centre);
                 let (spot, spot_inner) = if light.kind == LightKind::Spot {
                     let (outer, inner) = light.cone_cosines();
                     let aim = (centre - position).normalize_or(Vec3::NEG_Y);
-                    (aim.extend(outer).to_array(), [inner, 0.0, 0.0, 0.0])
+                    (aim.extend(outer).to_array(), [inner, shadow, 0.0, 0.0])
                 } else {
-                    ([0.0, 0.0, 0.0, NO_CONE], [0.0; 4])
+                    ([0.0, 0.0, 0.0, NO_CONE], [0.0, shadow, 0.0, 0.0])
                 };
                 Self {
                     position: position.extend(1.0).to_array(),
@@ -90,7 +95,7 @@ struct ObjectUniforms {
     color_above: [f32; 4],
 }
 
-struct GpuMesh {
+pub(crate) struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
@@ -100,6 +105,7 @@ struct GpuMesh {
 /// egui-wgpu's callback resources); offscreen pictures own another.
 pub struct SceneRenderer {
     pipeline: wgpu::RenderPipeline,
+    one_sided_pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     object_layout: wgpu::BindGroupLayout,
@@ -110,8 +116,10 @@ pub struct SceneRenderer {
     object_capacity: u64,
     gamma_encode: bool,
     meshes: HashMap<ModelId, GpuMesh>,
-    /// Model of each object drawn by the last prepared frame.
-    draw_list: Vec<ModelId>,
+    shadows: ShadowResources,
+    /// Model of each object drawn by the last prepared frame, and whether
+    /// it is drawn one-sided.
+    draw_list: Vec<(ModelId, bool)>,
 }
 
 impl SceneRenderer {
@@ -125,6 +133,7 @@ impl SceneRenderer {
             &render_state.device,
             render_state.target_format,
             depth_format,
+            crate::DEFAULT_ATLAS_SIZE,
         );
         render_state
             .renderer
@@ -133,10 +142,13 @@ impl SceneRenderer {
             .insert(renderer);
     }
 
+    /// `shadow_atlas_size` is the shadow budget shared by all lights, the
+    /// side of the shadow atlas in texels.
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         depth_format: Option<wgpu::TextureFormat>,
+        shadow_atlas_size: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("houdon_scene_shader"),
@@ -152,53 +164,38 @@ impl SceneRenderer {
             true,
         );
 
+        let shadows = ShadowResources::new(device, &object_layout, shadow_atlas_size);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("houdon_scene_pipeline_layout"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&object_layout)],
+            bind_group_layouts: &[
+                Some(&globals_layout),
+                Some(&object_layout),
+                Some(&shadows.layout),
+            ],
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("houdon_scene_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                // Imported meshes are often open or single-sided; draw both
-                // sides and flip the normal in the shader.
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Imported meshes are often open or single-sided: draw both sides
+        // and flip the normal in the shader. The room is drawn from inside
+        // only, so it can be seen through from outside.
+        let pipeline = scene_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            depth_format,
+            None,
+            "houdon_scene_pipeline",
+        );
+        let one_sided_pipeline = scene_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            target_format,
+            depth_format,
+            Some(wgpu::Face::Back),
+            "houdon_one_sided_pipeline",
+        );
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_globals"),
@@ -223,6 +220,7 @@ impl SceneRenderer {
 
         Self {
             pipeline,
+            one_sided_pipeline,
             globals_buffer,
             globals_bind_group,
             object_layout,
@@ -231,13 +229,26 @@ impl SceneRenderer {
             object_stride,
             object_capacity,
             gamma_encode: !target_format.is_srgb(),
+            shadows,
             meshes: HashMap::new(),
             draw_list: Vec::new(),
         }
     }
 
-    /// Uploads what `frame` needs. Call before [`Self::draw`] in the same frame.
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) {
+    /// How many times the shadow maps were redrawn so far.
+    pub fn shadow_map_builds(&self) -> u64 {
+        self.shadows.builds
+    }
+
+    /// Uploads what `frame` needs and redraws the shadow maps into `encoder`
+    /// when needed. Call before [`Self::draw`] in the same frame.
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+    ) {
         // Meshes: upload new models, drop models no longer drawn.
         self.meshes
             .retain(|id, _| frame.objects.iter().any(|o| o.model_id == *id));
@@ -278,12 +289,21 @@ impl SceneRenderer {
         if !bytes.is_empty() {
             queue.write_buffer(&self.object_buffer, 0, &bytes);
         }
-        self.draw_list = frame.objects.iter().map(|o| o.model_id).collect();
+        self.draw_list = frame
+            .objects
+            .iter()
+            .map(|o| (o.model_id, o.one_sided))
+            .collect();
 
+        let shadow_layout = ShadowLayout::new(frame);
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
         let count = frame.lights.len().min(MAX_LIGHTS);
-        for (slot, light) in lights.iter_mut().zip(&frame.lights) {
-            *slot = GpuLight::new(light, frame.light_centre);
+        for ((slot, light), first_view) in lights
+            .iter_mut()
+            .zip(&frame.lights)
+            .zip(&shadow_layout.first_view)
+        {
+            *slot = GpuLight::new(light, frame.light_centre, *first_view);
         }
         let room = &frame.room;
         let globals = Globals {
@@ -297,16 +317,40 @@ impl SceneRenderer {
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
+
+        let casters: Vec<(usize, &GpuMesh)> = frame
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.casts_shadows)
+            .filter_map(|(i, o)| Some((i, self.meshes.get(&o.model_id)?)))
+            .collect();
+        let (object_bind_group, object_stride) = (&self.object_bind_group, self.object_stride);
+        self.shadows
+            .prepare(queue, encoder, frame, &shadow_layout, |pass| {
+                for (i, mesh) in &casters {
+                    let offset = (*i as u64 * object_stride) as u32;
+                    pass.set_bind_group(1, object_bind_group, &[offset]);
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            });
     }
 
     /// Draws the last prepared frame into `render_pass`.
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
-        for (i, id) in self.draw_list.iter().enumerate() {
+        render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
+        for (i, (id, one_sided)) in self.draw_list.iter().enumerate() {
             let Some(mesh) = self.meshes.get(id) else {
                 continue;
             };
+            render_pass.set_pipeline(if *one_sided {
+                &self.one_sided_pipeline
+            } else {
+                &self.pipeline
+            });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -314,6 +358,56 @@ impl SceneRenderer {
             render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
         }
     }
+}
+
+fn scene_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+    cull_mode: Option<wgpu::Face>,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode,
+            ..Default::default()
+        },
+        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn uniform_layout(
@@ -391,11 +485,11 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         match callback_resources.get_mut::<SceneRenderer>() {
-            Some(renderer) => renderer.prepare(device, queue, &self.frame),
+            Some(renderer) => renderer.prepare(device, queue, egui_encoder, &self.frame),
             None => log::error!("SceneRenderer::install was not called"),
         }
         Vec::new()
@@ -420,6 +514,15 @@ mod tests {
     #[test]
     fn the_shader_light_array_matches_max_lights() {
         let declaration = format!("const MAX_LIGHTS: u32 = {MAX_LIGHTS}u;");
+        assert!(include_str!("shader.wgsl").contains(&declaration));
+    }
+
+    #[test]
+    fn the_shader_shadow_views_match_the_renderer() {
+        let declaration = format!(
+            "const MAX_SHADOW_VIEWS: u32 = {}u;",
+            crate::MAX_SHADOW_VIEWS
+        );
         assert!(include_str!("shader.wgsl").contains(&declaration));
     }
 

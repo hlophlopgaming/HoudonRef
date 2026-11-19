@@ -78,3 +78,7 @@ room-grey = Серая студия
 room-white = Белая студия
 room-dark = Тёмная студия
 studio-ambient = Окружающий свет
+studio-camera-direction = Направление
+studio-camera-height = Высота
+studio-camera-distance = Расстояние
+studio-light-casts-shadows = Отбрасывает тени

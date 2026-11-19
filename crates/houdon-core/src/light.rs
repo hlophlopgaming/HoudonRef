@@ -38,6 +38,8 @@ pub struct Light {
     /// square of the distance.
     pub intensity: f32,
     pub enabled: bool,
+    /// Whether the light casts shadows of the objects.
+    pub casts_shadows: bool,
     /// Around the vertical axis, radians, 0 = in front of the scene.
     pub azimuth: f32,
     /// Above the horizon, radians.
@@ -68,6 +70,7 @@ impl Light {
                 1.0
             },
             enabled: true,
+            casts_shadows: true,
             azimuth: (-45f32).to_radians(),
             elevation: 45f32.to_radians(),
             distance,

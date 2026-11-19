@@ -68,12 +68,22 @@ impl OffscreenRenderer {
 
     /// Uses an existing device, for example the app's own.
     pub fn from_device(device: wgpu::Device, queue: wgpu::Queue) -> Self {
-        let renderer = SceneRenderer::new(&device, COLOR_FORMAT, Some(DEPTH_FORMAT));
+        let renderer = SceneRenderer::new(
+            &device,
+            COLOR_FORMAT,
+            Some(DEPTH_FORMAT),
+            crate::DEFAULT_ATLAS_SIZE,
+        );
         Self {
             device,
             queue,
             renderer,
         }
+    }
+
+    /// How many times the shadow maps were redrawn so far.
+    pub fn shadow_map_builds(&self) -> u64 {
+        self.renderer.shadow_map_builds()
     }
 
     /// Renders `frame` into a `width` × `height` picture.
@@ -106,13 +116,13 @@ impl OffscreenRenderer {
         let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer.prepare(&self.device, &self.queue, frame);
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("houdon_offscreen"),
             });
+        self.renderer
+            .prepare(&self.device, &self.queue, &mut encoder, frame);
         {
             let [r, g, b] = frame.clear_color().map(|c| f64::from(c) / 255.0);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

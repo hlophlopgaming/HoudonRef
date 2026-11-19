@@ -217,6 +217,41 @@ impl Studio {
         if ui.add(slider).changed() {
             self.scene.camera.set_focal_length_keep_framing(focal);
         }
+        let camera = &mut self.scene.camera;
+        // Shown around the front (0°) from -180° to 180°.
+        let mut direction = snap_to_zero(wrap_degrees(camera.yaw.to_degrees()));
+        if ui
+            .add(
+                egui::Slider::new(&mut direction, -180.0..=180.0)
+                    .suffix("°")
+                    .text(tr.tr("studio-camera-direction")),
+            )
+            .changed()
+        {
+            camera.yaw = direction.to_radians();
+        }
+        let mut height = snap_to_zero(camera.pitch.to_degrees());
+        let pitch_range = OrbitCamera::MIN_PITCH.to_degrees()..=OrbitCamera::MAX_PITCH.to_degrees();
+        if ui
+            .add(
+                egui::Slider::new(&mut height, pitch_range)
+                    .suffix("°")
+                    .text(tr.tr("studio-camera-height")),
+            )
+            .changed()
+        {
+            camera.pitch = height.to_radians();
+        }
+        ui.horizontal(|ui| {
+            length_field(
+                ui,
+                tr,
+                self.units,
+                &mut camera.distance,
+                OrbitCamera::MIN_DISTANCE..=OrbitCamera::MAX_DISTANCE,
+            );
+            ui.label(tr.tr("studio-camera-distance"));
+        });
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr.tr("studio-frame-scene")).clicked() {
                 self.pending_frame = Some(FrameTarget::Scene);
@@ -346,6 +381,10 @@ impl Studio {
             light.color = glam::Vec3::from(color);
             remove = ui.button(tr.tr("studio-light-remove")).clicked();
         });
+        ui.checkbox(
+            &mut light.casts_shadows,
+            tr.tr("studio-light-casts-shadows"),
+        );
         if light.kind != before.kind {
             let kind = light.kind;
             light.kind = before.kind;
@@ -800,6 +839,11 @@ pub fn length_field(
         *metres = units.from_editing(shown);
     }
     changed
+}
+
+/// An angle in degrees brought into -180..180.
+fn wrap_degrees(degrees: f32) -> f32 {
+    (degrees + 180.0).rem_euclid(360.0) - 180.0
 }
 
 /// Snaps values that are zero up to rounding to exactly 0, so they do not

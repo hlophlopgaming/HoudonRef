@@ -13,7 +13,7 @@ pub mod units;
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind};
 pub use model::{Bounds, LoadError, Model, Vertex};
-pub use room::{BuiltinRoom, Room, RoomShape};
+pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
     MAX_LIGHTS, MIN_EYE_HEIGHT, ModelId, Object, ObjectId, PLAUSIBLE_SIZE, Scene, Transform,
 };

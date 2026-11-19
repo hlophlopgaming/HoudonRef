@@ -9,8 +9,10 @@ mod frame;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
 mod renderer;
+mod shadow;
 
 pub use frame::{Frame, FrameObject, ObjectColors};
 #[cfg(not(target_arch = "wasm32"))]
 pub use offscreen::{Image, OffscreenError, OffscreenRenderer};
 pub use renderer::{CLAY_COLOR, SceneRenderer, ViewportCallback};
+pub use shadow::{DEFAULT_ATLAS_SIZE, MAX_SHADOW_VIEWS};

@@ -18,3 +18,8 @@ thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4"
+
+[dev-dependencies]
+# Translates the shaders to GLSL ES 3.0, as wgpu does for WebGL2, so tests
+# catch what only the browser would otherwise reject.
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }

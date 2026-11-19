@@ -70,6 +70,10 @@ fn linear_to_srgb(linear: f32) -> u8 {
     (encoded * 255.0).round() as u8
 }
 
+/// How far the room reaches beyond the objects at least, metres: far enough
+/// that orbiting a framed view does not show its edges.
+pub const MIN_ROOM_REACH: f32 = 30.0;
+
 /// Room sizes are rounded to this step, metres, so small moves of the
 /// objects keep the same room instead of rebuilding it.
 const STEP: f32 = 0.5;
@@ -101,22 +105,26 @@ impl RoomShape {
         let up = |v: f32| (v / STEP).ceil() * STEP;
         let down = |v: f32| (v / STEP).floor() * STEP;
         let radius = objects.radius();
-        let height = up(objects.max.y.max(0.0) * 1.5 + 1.0);
-        let cove_radius = up(height * 0.25);
+        let height = up((objects.max.y.max(0.0) * 1.5 + 1.0).max(MIN_ROOM_REACH * 0.5));
+        // The cove is sized by the objects, not the tall backdrop, so the
+        // floor stays flat around them.
+        let cove_radius = up(objects.max.y.max(0.5) * 0.5);
         // The flat floor must reach behind the objects: the cove starts
         // only after a gap of at least its radius.
         let gap = (radius * 0.5 + 0.5).max(cove_radius + 0.2);
         Self {
             centre_x: (objects.center().x / STEP).round() * STEP,
-            half_width: up(objects.size().x * 0.5 + radius * 2.0 + 1.0),
+            half_width: up((objects.size().x * 0.5 + radius * 2.0 + 1.0).max(MIN_ROOM_REACH)),
             back_z: down(objects.min.z - gap),
-            front_z: up(objects.max.z + radius * 3.0 + 2.0),
+            front_z: up(objects.max.z + (radius * 3.0 + 2.0).max(MIN_ROOM_REACH)),
             height,
             cove_radius,
         }
     }
 
-    /// The sweep as a mesh with normals facing into the room.
+    /// The sweep as a mesh with normals facing into the room. Triangles wind
+    /// counter-clockwise seen from inside, so the room can be drawn one-sided
+    /// and seen through from outside.
     pub fn mesh(&self) -> Model {
         // The profile in the (z, y) plane from the front of the floor, round
         // the cove, up the backdrop; each point with its inward normal.
@@ -220,6 +228,15 @@ mod tests {
                 "size {size}: {shape:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_room_is_large_enough_to_keep_its_edges_out_of_view() {
+        let figure = Bounds::from_points([Vec3::new(-0.3, 0.0, -0.15), Vec3::new(0.3, 1.75, 0.15)]);
+        let shape = RoomShape::around(&figure);
+        assert!(shape.half_width >= MIN_ROOM_REACH, "{shape:?}");
+        assert!(shape.front_z - figure.max.z >= MIN_ROOM_REACH, "{shape:?}");
+        assert!(shape.height >= MIN_ROOM_REACH * 0.5, "{shape:?}");
     }
 
     #[test]
