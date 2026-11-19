@@ -38,6 +38,8 @@ impl Default for OrbitCamera {
 impl OrbitCamera {
     pub const MIN_PITCH: f32 = -1.55;
     pub const MAX_PITCH: f32 = 1.55;
+    pub const MIN_DISTANCE: f32 = 0.05;
+    pub const MAX_DISTANCE: f32 = 1000.0;
     pub const MIN_FOCAL_LENGTH_MM: f32 = 14.0;
     pub const MAX_FOCAL_LENGTH_MM: f32 = 300.0;
 
@@ -95,7 +97,7 @@ impl OrbitCamera {
 
     /// Multiplies the distance by `factor` (less than 1 moves closer).
     pub fn dolly(&mut self, factor: f32) {
-        self.distance = (self.distance * factor).clamp(0.05, 1000.0);
+        self.distance = (self.distance * factor).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
     }
 
     /// Sets the focal length, keeping the framing: the distance changes so

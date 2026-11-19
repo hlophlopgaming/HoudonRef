@@ -78,3 +78,6 @@ room-grey = Grey studio
 room-white = White studio
 room-dark = Dark studio
 studio-ambient = Ambient light
+studio-camera-direction = Direction
+studio-camera-height = Height
+studio-camera-distance = Distance
