@@ -5,10 +5,12 @@ use glam::Vec3;
 use crate::mask::LightMask;
 
 /// Identifies a light in a scene.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct LightId(pub(crate) u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LightKind {
     /// Parallel rays from far away, like the sun. No falloff.
     Directional,
@@ -35,7 +37,7 @@ impl LightKind {
 
 /// One light. Placed around the scene centre by angles and distance, so it
 /// stays in place relative to the objects as they move.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Light {
     pub id: LightId,
     pub kind: LightKind,

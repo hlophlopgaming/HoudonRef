@@ -47,12 +47,20 @@ Tests:
 cargo test --workspace
 ```
 
+## Saving Studio scenes
+
+Use **Save scene** and **Open scene** in Studio, or drop a `.ron` file onto
+the window to open it. Desktop saves normally reference the original model
+paths. Enable **Embed models in scene file** to share the scene without
+those files. Browser downloads always embed the models. A missing model
+is reported when opening a scene, and the remaining objects still load.
+
 ## Credits
 
 - Name after Jean-Antoine Houdon, sculptor of the *Écorché* (1767).
 - Logo after *A kneeling écorché figure* by J. Gamelin (1778/79). Source image: [Wellcome Collection](https://wellcomecollection.org/works/gv249kuf), CC BY 4.0.
 - Planned anatomy data: [Écorché](https://github.com/Charleeh/ecorche) and [Z-Anatomy](https://www.z-anatomy.com/), both CC BY-SA 4.0. Anatomy content will ship as separate content packs under its own licence.
 - Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
-- Planned Studio content: matcaps from [Blender](https://github.com/blender/blender/tree/main/release/datafiles/studiolights/matcap) (CC0).
+- Studio matcaps: Blender community, CC0 or public domain. See [assets/matcaps/CREDITS.md](assets/matcaps/CREDITS.md).
 - Reference heads: *Asaro-head* by Ivan Chakir, *Planar head (Oleg Toropygin)* by BlueHorse, *Zbrush head base* by hexmeff and *Wolfsaro Head - Anthro Canine Head Reference* by mmdrawstuff, all CC BY 4.0. See [assets/models/heads/CREDITS.md](assets/models/heads/CREDITS.md).
 - Light masks: *Light Masks* by Kenney (kenney.nl), CC0. See [assets/masks/CREDITS.md](assets/masks/CREDITS.md).

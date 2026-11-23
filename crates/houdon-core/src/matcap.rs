@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 /// A matcap as linear RGBA, rows top to bottom.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MatcapImage {
     pub width: u32,
     pub height: u32,
@@ -77,7 +77,7 @@ fn srgb_to_linear(c: f32) -> f32 {
 }
 
 /// The matcap of the Solid mode.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Matcap {
     /// A built-in matcap's name or the user's file name.
     pub name: String,

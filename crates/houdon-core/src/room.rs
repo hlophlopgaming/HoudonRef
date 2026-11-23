@@ -19,7 +19,7 @@ impl BuiltinRoom {
 /// without a corner, like a photo studio, and the ambient light they give:
 /// the backdrop's colour from above and the floor's colour from below, so
 /// a coloured floor tints the underside of forms (a reflex).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Room {
     /// Linear RGB.
     pub floor_color: Vec3,

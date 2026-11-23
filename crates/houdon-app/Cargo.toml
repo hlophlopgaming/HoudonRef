@@ -20,9 +20,11 @@ serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"
+rfd = "0.17.2"
+tempfile = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement", "Navigator", "Response"] }
+web-sys = { version = "0.3", features = ["Blob", "Document", "FileList", "HtmlAnchorElement", "HtmlCanvasElement", "HtmlInputElement", "Navigator", "Response", "Url", "Window"] }

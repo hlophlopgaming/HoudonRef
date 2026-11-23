@@ -34,9 +34,16 @@ studio-light-elevation = Высота
 studio-light-intensity = Яркость
 
 error-blend-file = Файлы .blend пока нельзя открыть напрямую. В Blender выберите File → Export → glTF 2.0 (.glb) и откройте получившийся файл.
-error-unsupported-file = Неподдерживаемый тип файла: { $name }. Откройте файл .glb или .gltf.
+error-unsupported-file = Неподдерживаемый тип файла: { $name }. Перетащите модель (.glb или .gltf), изображение или сцену (.ron).
 error-load-failed = Не удалось открыть { $name }: { $reason }
 error-read-failed = Не удалось прочитать { $name }.
+scene-open = Открыть сцену
+scene-save = Сохранить сцену
+scene-embed-models = Встроить модели в файл сцены
+scene-file-type = Сцена HoudonRef
+scene-open-error = Не удалось открыть сцену { $name }: { $reason }
+scene-save-error = Не удалось сохранить сцену: { $reason }
+scene-model-skipped = Не удалось загрузить модель { $name }. Её объекты пропущены.
 
 studio-object-label = { $model } { $number }
 unit-metre-short = м
@@ -131,7 +138,7 @@ studio-matcap = Мэткап
 studio-matcap-none = Нет (выберите)
 matcap-picker = Мэткапы
 matcap-picker-hint = Щёлкните мэткап, чтобы выбрать его. Пока это окно открыто, перетащите в окно EXR, PNG или JPG, чтобы взять свой.
-matcap-credit = Мэткапы из Blender, CC0.
+matcap-credit = Мэткапы сообщества Blender (CC0 или общественное достояние).
 error-matcap-unreadable = { $name } — не EXR, PNG или JPEG, или файл не читается.
 
 studio-color-source = Цвет

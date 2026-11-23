@@ -15,6 +15,9 @@ use crate::room::{Room, RoomShape};
 use crate::shading::{ColorSource, Shading, Surface, random_color};
 use crate::{Bounds, Model, OrbitCamera};
 
+mod file;
+pub use file::{LoadedScene, ModelSource, SceneFileError};
+
 /// Identifies a model. Ids are unique for the whole run of the app, so the
 /// renderer can cache GPU data by id across scenes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -28,11 +31,13 @@ impl ModelId {
 }
 
 /// Identifies an object in a scene.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ObjectId(pub(crate) u64);
 
 /// Where an object is: position, rotation and uniform size.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Transform {
     pub translation: Vec3,
     /// Rotation as angles in radians around Y, then X, then Z, the order

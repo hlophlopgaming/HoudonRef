@@ -9,7 +9,7 @@ use crate::Bounds;
 /// Height of a full-frame (35 mm) sensor, used to turn focal length into a field of view.
 pub const SENSOR_HEIGHT_MM: f32 = 24.0;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrbitCamera {
     /// Point the camera looks at.
     pub target: Vec3,
