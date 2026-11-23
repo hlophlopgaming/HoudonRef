@@ -9,8 +9,11 @@ rust-version.workspace = true
 
 [dependencies]
 bytemuck.workspace = true
-glam.workspace = true
+glam = { workspace = true, features = ["serde"] }
 gltf.workspace = true
 # Decodes light masks (PNG, JPEG) and matcaps (Blender ships them as EXR).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "exr"] }
 thiserror.workspace = true
+base64 = "0.13"
+ron = "0.12"
+serde = { version = "1", features = ["derive", "rc"] }

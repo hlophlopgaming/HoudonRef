@@ -557,7 +557,9 @@ impl SceneRenderer {
         match (frame.shading_mode, frame.solid, &frame.matcap) {
             (ShadingMode::Lit, ..) => SHADE_LIT,
             (ShadingMode::Solid, SolidLighting::Flat, _) => SHADE_FLAT,
-            (ShadingMode::Solid, SolidLighting::Matcap, Some(image)) => {
+            (ShadingMode::Solid, SolidLighting::Matcap, Some(image))
+                if image.width.max(image.height) <= device.limits().max_texture_dimension_2d =>
+            {
                 if self.matcap.prepare(device, queue, image) {
                     self.globals_bind_group = globals_bind_group(
                         device,
@@ -569,7 +571,7 @@ impl SceneRenderer {
                 }
                 SHADE_MATCAP
             }
-            // Without a matcap, the Studio light.
+            // An absent or oversized matcap uses the Studio light.
             (ShadingMode::Solid, ..) => SHADE_STUDIO,
         }
     }

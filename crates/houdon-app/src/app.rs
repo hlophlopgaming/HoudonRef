@@ -165,7 +165,9 @@ impl HoudonApp {
 
 impl eframe::App for HoudonApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.studio.poll_file_loads(ui.ctx(), &self.localizer);
+        if let Some(height) = self.studio.poll_file_loads(ui.ctx(), &self.localizer) {
+            self.figure_height = height;
+        }
         self.studio
             .apply_settings(self.units, self.figure_height, self.anti_aliasing);
 

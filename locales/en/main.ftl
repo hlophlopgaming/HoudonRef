@@ -34,9 +34,16 @@ studio-light-elevation = Height
 studio-light-intensity = Intensity
 
 error-blend-file = .blend files cannot be opened directly yet. In Blender, use File → Export → glTF 2.0 (.glb) and open that file.
-error-unsupported-file = Unsupported file type: { $name }. Open a .glb or .gltf file.
+error-unsupported-file = Unsupported file type: { $name }. Drop a model (.glb or .gltf), an image, or a scene (.ron).
 error-load-failed = Could not open { $name }: { $reason }
 error-read-failed = Could not read { $name }.
+scene-open = Open scene
+scene-save = Save scene
+scene-embed-models = Embed models in scene file
+scene-file-type = HoudonRef scene
+scene-open-error = Could not open scene { $name }: { $reason }
+scene-save-error = Could not save the scene: { $reason }
+scene-model-skipped = Model { $name } could not be loaded. Its objects were skipped.
 
 studio-object-label = { $model } { $number }
 unit-metre-short = m
@@ -131,7 +138,7 @@ studio-matcap = Matcap
 studio-matcap-none = None (choose one)
 matcap-picker = Matcaps
 matcap-picker-hint = Click a matcap to use it. While this window is open, drop an EXR, PNG or JPG on the window to use your own.
-matcap-credit = Matcaps from Blender, CC0.
+matcap-credit = Matcaps from the Blender community (CC0 or public domain).
 error-matcap-unreadable = { $name } is not an EXR, PNG or JPEG image that can be read.
 
 studio-color-source = Colour

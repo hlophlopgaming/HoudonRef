@@ -1,5 +1,4 @@
-//! The built-in matcaps (Blender's set, CC0), used exactly as Blender ships
-//! them, and their picker thumbnails.
+//! The built-in Blender matcaps and their picker thumbnails.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,7 +6,6 @@ use std::sync::Arc;
 use houdon_core::MatcapImage;
 
 /// Includes matcaps from `assets/matcaps/blender` by name.
-#[allow(unused_macros)]
 macro_rules! blender {
     ($($name:literal),* $(,)?) => {
         &[$((
@@ -16,14 +14,42 @@ macro_rules! blender {
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../assets/matcaps/blender/",
                 $name,
-                ".exr"
+                ".png"
             )) as &[u8],
         )),*]
     };
 }
 
 /// Every built-in matcap, by name.
-pub const BUILT_IN: &[(&str, &[u8])] = &[];
+pub const BUILT_IN: &[(&str, &[u8])] = blender![
+    "basic_bright",
+    "basic_dark",
+    "basic_grey",
+    "basic_side",
+    "brush_thumbnail_preview",
+    "ceramic_dark",
+    "ceramic_lightbulb",
+    "check_gradient",
+    "check_normal+y",
+    "check_reflection_horizontal",
+    "check_reflection_vertical",
+    "check_rim_dark",
+    "check_rim_light",
+    "clay_brown",
+    "clay_green",
+    "clay_studio",
+    "clay_warm",
+    "fullmetal",
+    "hard_surface_grey",
+    "hard_surface_red",
+    "metal_bronze",
+    "metal_carpaint",
+    "pearl",
+    "red_wax",
+    "resin",
+    "toon_dark",
+    "toon_light",
+];
 
 /// Side of the picker's thumbnails, pixels.
 const THUMBNAIL_SIZE: usize = 64;
@@ -105,9 +131,11 @@ mod tests {
 
     #[test]
     fn built_in_matcaps_decode() {
+        assert_eq!(BUILT_IN.len(), 27);
         let mut library = MatcapLibrary::default();
         for (name, _) in BUILT_IN {
-            assert!(library.image(name).is_some(), "{name}");
+            let image = library.image(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!((image.width, image.height), (256, 256), "{name}");
         }
     }
 

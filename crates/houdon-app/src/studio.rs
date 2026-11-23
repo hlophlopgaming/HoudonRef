@@ -1,20 +1,23 @@
 //! Studio section: arrange objects and light them.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
     BuiltinRoom, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
-    LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, Model, ModelId,
-    OrbitCamera, PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
+    LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, ModelId, OrbitCamera,
+    PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
 
 use crate::masks::{self, MaskLibrary};
 use crate::matcaps::{self, MatcapLibrary};
+
+mod scene_files;
+use scene_files::{FileResult, ModelAsset};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -91,11 +94,6 @@ impl Builtin {
         }
     }
 
-    /// Where the model came from, for [`Studio::sources`].
-    fn source(self) -> String {
-        format!("builtin:{}", self.name_and_bytes().0)
-    }
-
     /// Translated name shown in the objects list.
     fn message_id(self) -> &'static str {
         match self {
@@ -117,14 +115,10 @@ enum FrameTarget {
     Selected,
 }
 
-/// A file read from disk or the browser, waiting to be parsed.
-type FileResult = (String, Result<Vec<u8>, String>);
-
 pub struct Studio {
     scene: Scene,
-    /// Models already in the scene by where they came from, so adding the
-    /// same model again places another object of it instead of loading it twice.
-    sources: HashMap<String, ModelId>,
+    /// Original model files, kept for portable scene saves.
+    sources: HashMap<ModelId, ModelAsset>,
     pending_frame: Option<FrameTarget>,
     /// The light being edited in the side panel; editor state, not scene state.
     selected_light: Option<LightId>,
@@ -143,6 +137,7 @@ pub struct Studio {
     pending_mask: Option<(LightId, &'static str)>,
     matcaps: MatcapLibrary,
     matcap_picker_open: bool,
+    embed_models: bool,
 }
 
 impl Studio {
@@ -162,6 +157,7 @@ impl Studio {
             pending_mask: None,
             matcaps: MatcapLibrary::default(),
             matcap_picker_open: false,
+            embed_models: cfg!(target_arch = "wasm32"),
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -175,24 +171,23 @@ impl Studio {
     /// rotation and size, so placement uses the object's real extent.
     fn add_object_from(
         &mut self,
-        source: String,
-        load: impl FnOnce() -> Result<Model, LoadError>,
+        name: &str,
+        asset: ModelAsset,
         real_size: Option<f32>,
         transform: Transform,
     ) -> Result<ModelId, LoadError> {
-        let known = self
-            .sources
-            .get(&source)
-            .copied()
-            .filter(|id| self.scene.model(*id).is_some());
+        let known = self.sources.iter().find_map(|(&id, source)| {
+            (self.scene.model(id).is_some_and(|model| model.name == name) && *source == asset)
+                .then_some(id)
+        });
         let model_id = match known {
             Some(id) => id,
             None => {
-                let id = self.scene.add_model(load()?);
+                let id = self.scene.add_model(asset.load(name)?);
                 if let Some(size) = real_size {
                     self.scene.set_real_size(id, size);
                 }
-                self.sources.insert(source, id);
+                self.sources.insert(id, asset);
                 id
             }
         };
@@ -204,33 +199,34 @@ impl Studio {
     }
 
     fn add_builtin(&mut self, builtin: Builtin) {
-        let (name, bytes) = builtin.name_and_bytes();
+        let (name, _) = builtin.name_and_bytes();
         let facing = Transform {
             rotation: glam::Vec3::new(0.0, builtin.facing(), 0.0),
             ..Transform::default()
         };
-        let load = || Model::from_gltf_slice(name, bytes);
-        if let Err(error) =
-            self.add_object_from(builtin.source(), load, builtin.real_size(), facing)
-        {
+        if let Err(error) = self.add_object_from(
+            name,
+            ModelAsset::builtin(builtin),
+            builtin.real_size(),
+            facing,
+        ) {
             log::error!("built-in model {name} failed to load: {error}");
         }
     }
 
-    fn load_file(&mut self, name: &str, bytes: &[u8], tr: &Localizer) {
+    fn load_file(&mut self, name: &str, path: Option<PathBuf>, bytes: Vec<u8>, tr: &Localizer) {
         // An image is a matcap while the matcap window is open (or an EXR,
         // which only matcaps use), otherwise the selected light's mask.
         match extension(name).as_str() {
-            "exr" => return self.load_matcap_file(name, bytes, tr),
+            "exr" => return self.load_matcap_file(name, &bytes, tr),
             "png" | "jpg" | "jpeg" if self.matcap_picker_open => {
-                return self.load_matcap_file(name, bytes, tr);
+                return self.load_matcap_file(name, &bytes, tr);
             }
-            "png" | "jpg" | "jpeg" => return self.load_mask_file(name, bytes, tr),
+            "png" | "jpg" | "jpeg" => return self.load_mask_file(name, &bytes, tr),
             _ => {}
         }
-        let source = format!("file:{name}:{}", bytes.len());
-        let load = || Model::from_gltf_slice(name, bytes);
-        if let Err(error) = self.add_object_from(source, load, None, Transform::default()) {
+        let asset = ModelAsset::imported(path, bytes);
+        if let Err(error) = self.add_object_from(name, asset, None, Transform::default()) {
             self.message = Some(tr.tr_args(
                 "error-load-failed",
                 &[
@@ -242,11 +238,13 @@ impl Studio {
     }
 
     /// Takes files dropped onto the window and files whose bytes have arrived.
-    pub fn poll_file_loads(&mut self, ctx: &egui::Context, tr: &Localizer) {
+    pub fn poll_file_loads(&mut self, ctx: &egui::Context, tr: &Localizer) -> Option<f32> {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
             let name = file_name(file.path());
+            let is_scene = extension(&name) == "ron";
             match extension(&name).as_str() {
+                "ron" => {}
                 "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => {}
                 "blend" => {
                     self.message = Some(tr.tr("error-blend-file"));
@@ -260,7 +258,12 @@ impl Studio {
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            self.incoming.lock().unwrap().push((name, file.bytes()));
+            self.incoming.lock().unwrap().push(FileResult {
+                name,
+                path: std::path::absolute(file.path()).ok(),
+                bytes: file.bytes(),
+                is_scene,
+            });
 
             #[cfg(target_arch = "wasm32")]
             {
@@ -268,22 +271,41 @@ impl Studio {
                 let ctx = ctx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     let bytes = file.bytes_async().await;
-                    incoming.lock().unwrap().push((name, bytes));
+                    incoming.lock().unwrap().push(FileResult {
+                        name,
+                        path: None,
+                        bytes,
+                        is_scene,
+                    });
                     ctx.request_repaint();
                 });
             }
         }
 
         let ready: Vec<FileResult> = std::mem::take(&mut *self.incoming.lock().unwrap());
-        for (name, bytes) in ready {
+        let mut figure_height = None;
+        for FileResult {
+            name,
+            path,
+            bytes,
+            is_scene,
+        } in ready
+        {
             match bytes {
-                Ok(bytes) => self.load_file(&name, &bytes, tr),
+                Ok(bytes) if is_scene => {
+                    if self.open_scene(&name, path.as_deref(), &bytes, tr) {
+                        figure_height = Some(self.scene.figure_height());
+                    }
+                }
+                Ok(bytes) => self.load_file(&name, path, bytes, tr),
                 Err(error) => {
                     log::warn!("reading {name} failed: {error}");
                     self.message = Some(tr.tr_args("error-read-failed", &[("name", name.into())]));
                 }
             }
         }
+        self.sources.retain(|id, _| self.scene.model(*id).is_some());
+        figure_height
     }
 
     /// Applies the app settings that affect the Studio.
@@ -491,6 +513,8 @@ impl Studio {
 
     fn side_panel(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.add_space(6.0);
+        self.scene_file_controls(ui, tr);
+        ui.separator();
         self.objects_section(ui, tr);
         ui.separator();
         self.selected_object_section(ui, tr);
@@ -883,9 +907,7 @@ impl Studio {
     /// Name of a model for the interface: translated for built-in models,
     /// the file name for loaded ones.
     fn model_display_name(&self, id: ModelId, tr: &Localizer) -> String {
-        let builtin = Builtin::ALL
-            .into_iter()
-            .find(|b| self.sources.get(&b.source()) == Some(&id));
+        let builtin = self.sources.get(&id).and_then(|source| source.builtin);
         match builtin {
             Some(builtin) => tr.tr(builtin.message_id()),
             None => self

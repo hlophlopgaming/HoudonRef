@@ -9,7 +9,7 @@ pub const DEFAULT_PATTERN_SIZE: f32 = 2.0;
 
 /// A mask as brightness, 0 (blocks the light) to 255 (lets it through),
 /// rows top to bottom.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MaskImage {
     pub width: u32,
     pub height: u32,
@@ -99,7 +99,7 @@ impl MaskImage {
 }
 
 /// The mask a light shines through.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LightMask {
     /// Where it came from: a built-in mask's name or the user's file name.
     pub name: String,

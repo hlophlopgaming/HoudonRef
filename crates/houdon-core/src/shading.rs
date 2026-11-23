@@ -7,7 +7,9 @@ use crate::ObjectId;
 use crate::matcap::Matcap;
 
 /// Where an object's colour comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum ColorSource {
     /// The model's own materials; models without materials show as Clay.
     #[default]
@@ -26,7 +28,9 @@ impl ColorSource {
 pub const DEFAULT_CLAY_COLOR: Vec3 = Vec3::new(0.62, 0.6, 0.57);
 
 /// How surfaces are lit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum ShadingMode {
     /// A fixed light that ignores the Scene's Lights, to read form alone.
     Solid,
@@ -36,7 +40,9 @@ pub enum ShadingMode {
 }
 
 /// The light of the Solid mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum SolidLighting {
     /// A soft studio light that turns with the view.
     #[default]
@@ -53,7 +59,7 @@ impl SolidLighting {
 
 /// The cavity overlay: brightens ridges and darkens hollows so small
 /// changes of form read, in Solid and Lit.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Cavity {
     /// From the mesh's curvature: stable while the camera moves.
     pub geometry: bool,
@@ -88,7 +94,7 @@ impl Default for Cavity {
 }
 
 /// Line overlays for studying the drawing of a form, in Solid and Lit.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Lines {
     /// Contour lines: silhouettes and the inner folds of a form.
     pub contours: bool,
@@ -122,7 +128,7 @@ impl Default for Lines {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Shading {
     pub mode: ShadingMode,
     pub solid: SolidLighting,
@@ -159,7 +165,9 @@ impl Default for Shading {
 }
 
 /// How the finished picture is turned into a value study.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum ValueMode {
     /// The picture as it is.
     #[default]
@@ -178,7 +186,7 @@ impl ValueMode {
 
 /// A value study: the way artists squint at a model to see the big masses
 /// of light and shadow before the details.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ValueStudy {
     pub mode: ValueMode,
     /// Moves where one tone turns into the next, -1 to 1: positive puts

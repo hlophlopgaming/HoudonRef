@@ -42,14 +42,14 @@ Done:
 - [x] Anti-aliasing: 4× MSAA in the viewport, supersampled offscreen pictures (#23).
 - [x] Soft shadows: smooth edges and per-light shadow softness, sharp at the contact and softer with distance (#24).
 - [x] Light masks: 152 Kenney masks (12 built in, the rest fetched on the web when chosen) and the artist's own images, on spot and directional lights (#13).
-- [x] Solid shading mode: Studio, Matcap and Flat light; the artist's own matcaps (#15, Blender's set still to add).
+- [x] Solid shading mode: Studio, Matcap and Flat light; 27 Blender matcaps and the artist's own images (#15).
 - [x] Cavity, from the mesh and from the screen, in Solid and Lit (#16).
 - [x] Contour lines, wireframe and backface culling (#17).
+- [x] Scene files with optional model embedding on desktop and portable downloads on the web (#11).
 
 Next:
 
-- [ ] Blender's matcap set for the Solid mode (#15).
-- [ ] Scene files (#11), presets for light, room and camera (#18).
+- [ ] Presets for light, room and camera (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
 
