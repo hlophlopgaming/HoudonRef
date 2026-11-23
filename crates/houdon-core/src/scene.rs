@@ -435,6 +435,15 @@ impl Scene {
         &self.lights
     }
 
+    pub(crate) fn replace_lights(&mut self, lights: &[Light]) {
+        self.lights.clear();
+        self.lights.extend(lights.iter().cloned().map(|mut light| {
+            light.id = LightId(self.next_light);
+            self.next_light += 1;
+            light
+        }));
+    }
+
     pub fn light(&self, id: LightId) -> Option<&Light> {
         self.lights.iter().find(|l| l.id == id)
     }

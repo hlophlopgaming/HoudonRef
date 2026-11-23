@@ -99,10 +99,13 @@ impl HoudonApp {
             .filter(|h| FIGURE_HEIGHTS.contains(h))
             .unwrap_or(DEFAULT_FIGURE_HEIGHT);
 
+        let localizer = Localizer::new(language);
+        let mut studio = Studio::new();
+        studio.load_light_presets(&localizer);
         Self {
-            localizer: Localizer::new(language),
+            localizer,
             section: settings.section,
-            studio: Studio::new(),
+            studio,
             units,
             figure_height,
             anti_aliasing: settings.anti_aliasing.unwrap_or(true),

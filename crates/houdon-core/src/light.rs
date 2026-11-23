@@ -75,6 +75,34 @@ pub const MAX_SHADOW_ANGLE: f32 = 0.35;
 pub const DEFAULT_LIGHT_DISTANCE: f32 = 3.0;
 
 impl Light {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.color.is_finite()
+            && self.distance.is_finite()
+            && self.distance > 0.0
+            && [
+                self.intensity,
+                self.azimuth,
+                self.elevation,
+                self.cone_angle,
+                self.softness,
+                self.shadow_softness,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+            && self.mask.as_ref().is_none_or(|mask| {
+                let image = &mask.image;
+                mask.pattern_size.is_finite()
+                    && mask.pattern_size > 0.0
+                    && image.width > 0
+                    && image.height > 0
+                    && image
+                        .width
+                        .checked_mul(image.height)
+                        .map(|pixels| pixels as usize)
+                        == Some(image.luminance.len())
+            })
+    }
+
     /// The light's apparent size seen from the scene, radians across.
     pub fn shadow_angle(&self) -> f32 {
         self.shadow_softness.clamp(0.0, 1.0) * MAX_SHADOW_ANGLE

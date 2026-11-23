@@ -16,8 +16,10 @@ use houdon_render::{AntiAliasing, Frame, ViewportCallback};
 use crate::masks::{self, MaskLibrary};
 use crate::matcaps::{self, MatcapLibrary};
 
+mod light_presets;
 mod scene_files;
-use scene_files::{FileResult, ModelAsset};
+use light_presets::LightPresets;
+use scene_files::{FileKind, FileResult, ModelAsset};
 
 const MALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../assets/models/test/female.glb");
@@ -138,6 +140,7 @@ pub struct Studio {
     matcaps: MatcapLibrary,
     matcap_picker_open: bool,
     embed_models: bool,
+    light_presets: LightPresets,
 }
 
 impl Studio {
@@ -158,6 +161,7 @@ impl Studio {
             matcaps: MatcapLibrary::default(),
             matcap_picker_open: false,
             embed_models: cfg!(target_arch = "wasm32"),
+            light_presets: LightPresets::default(),
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -242,10 +246,10 @@ impl Studio {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         for file in dropped {
             let name = file_name(file.path());
-            let is_scene = extension(&name) == "ron";
-            match extension(&name).as_str() {
-                "ron" => {}
-                "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => {}
+            let kind = match extension(&name).as_str() {
+                "ron" if name.to_ascii_lowercase().ends_with(".light.ron") => FileKind::LightPreset,
+                "ron" => FileKind::Scene,
+                "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => FileKind::ModelOrImage,
                 "blend" => {
                     self.message = Some(tr.tr("error-blend-file"));
                     continue;
@@ -255,14 +259,14 @@ impl Studio {
                         Some(tr.tr_args("error-unsupported-file", &[("name", name.into())]));
                     continue;
                 }
-            }
+            };
 
             #[cfg(not(target_arch = "wasm32"))]
             self.incoming.lock().unwrap().push(FileResult {
                 name,
                 path: std::path::absolute(file.path()).ok(),
                 bytes: file.bytes(),
-                is_scene,
+                kind,
             });
 
             #[cfg(target_arch = "wasm32")]
@@ -275,7 +279,7 @@ impl Studio {
                         name,
                         path: None,
                         bytes,
-                        is_scene,
+                        kind,
                     });
                     ctx.request_repaint();
                 });
@@ -288,11 +292,15 @@ impl Studio {
             name,
             path,
             bytes,
-            is_scene,
+            kind,
         } in ready
         {
+            if matches!(kind, FileKind::LightPreset) {
+                self.light_presets.import(bytes, tr);
+                continue;
+            }
             match bytes {
-                Ok(bytes) if is_scene => {
+                Ok(bytes) if matches!(kind, FileKind::Scene) => {
                     if self.open_scene(&name, path.as_deref(), &bytes, tr) {
                         figure_height = Some(self.scene.figure_height());
                     }
@@ -723,6 +731,7 @@ impl Studio {
 
     fn lights_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.strong(tr.tr("studio-lights"));
+        self.light_presets_ui(ui, tr);
         let can_add = self.scene.lights().len() < MAX_LIGHTS;
         ui.horizontal_wrapped(|ui| {
             for kind in LightKind::ALL {

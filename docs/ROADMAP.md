@@ -46,10 +46,11 @@ Done:
 - [x] Cavity, from the mesh and from the screen, in Solid and Lit (#16).
 - [x] Contour lines, wireframe and backface culling (#17).
 - [x] Scene files with optional model embedding on desktop and portable downloads on the web (#11).
+- [x] Light presets with built-ins, local storage, and RON import and export (#18).
 
 Next:
 
-- [ ] Presets for light, room and camera (#18).
+- [ ] Room and camera presets (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
 

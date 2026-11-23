@@ -55,6 +55,13 @@ paths. Enable **Embed models in scene file** to share the scene without
 those files. Browser downloads always embed the models. A missing model
 is reported when opening a scene, and the remaining objects still load.
 
+## Reusing Studio lights
+
+Under **Lights → Light presets**, choose a preset and select **Apply**.
+Name the current lights and select **Save current lights** to reuse them
+in other scenes. **Export…** writes a portable `.light.ron` file with its
+masks. Open it with **Import…** or drop it onto the Studio.
+
 ## Credits
 
 - Name after Jean-Antoine Houdon, sculptor of the *Écorché* (1767).
@@ -63,4 +70,5 @@ is reported when opening a scene, and the remaining objects still load.
 - Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
 - Studio matcaps: Blender community, CC0 or public domain. See [assets/matcaps/CREDITS.md](assets/matcaps/CREDITS.md).
 - Reference heads: *Asaro-head* by Ivan Chakir, *Planar head (Oleg Toropygin)* by BlueHorse, *Zbrush head base* by hexmeff and *Wolfsaro Head - Anthro Canine Head Reference* by mmdrawstuff, all CC BY 4.0. See [assets/models/heads/CREDITS.md](assets/models/heads/CREDITS.md).
+- Light presets: Three-point, Sunrise and Cloudy are adapted from the Bforartists Default Library. See [assets/presets/CREDITS.md](assets/presets/CREDITS.md).
 - Light masks: *Light Masks* by Kenney (kenney.nl), CC0. See [assets/masks/CREDITS.md](assets/masks/CREDITS.md).

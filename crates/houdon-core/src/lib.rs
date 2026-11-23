@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod light;
+pub mod light_preset;
 pub mod mask;
 pub mod matcap;
 pub mod model;
@@ -15,6 +16,7 @@ pub mod units;
 
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
+pub use light_preset::{LightPreset, LightPresetError};
 pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
 pub use matcap::{Matcap, MatcapError, MatcapImage};
 pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};

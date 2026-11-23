@@ -8,13 +8,20 @@ use houdon_i18n::Localizer;
 
 use super::{Builtin, Studio, extension, file_name};
 
-const DEFAULT_NAME: &str = "scene.ron";
+const SCENE_FILE_NAME: &str = "scene.ron";
+
+#[derive(Clone, Copy)]
+pub(super) enum FileKind {
+    ModelOrImage,
+    Scene,
+    LightPreset,
+}
 
 pub(super) struct FileResult {
     pub name: String,
     pub path: Option<PathBuf>,
     pub bytes: Result<Vec<u8>, String>,
-    pub is_scene: bool,
+    pub kind: FileKind,
 }
 
 #[derive(PartialEq, Eq)]
@@ -144,7 +151,7 @@ impl Studio {
     pub(super) fn scene_file_controls(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr.tr("scene-open")).clicked() {
-                self.pick_scene(ui.ctx(), &tr.tr("scene-file-type"));
+                self.pick_ron(ui.ctx(), &tr.tr("scene-file-type"), FileKind::Scene);
             }
             if ui.button(tr.tr("scene-save")).clicked() {
                 self.save_scene(tr);
@@ -163,14 +170,20 @@ impl Studio {
                     .map(|asset| asset.source(self.embed_models))
             })
             .map_err(|error| error.to_string())
-            .and_then(|document| write_scene(document.as_bytes(), &tr.tr("scene-file-type")));
+            .and_then(|document| {
+                write_ron(
+                    document.as_bytes(),
+                    &tr.tr("scene-file-type"),
+                    SCENE_FILE_NAME,
+                )
+            });
         if let Err(reason) = result {
             self.message = Some(tr.tr_args("scene-save-error", &[("reason", reason.into())]));
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn pick_scene(&mut self, ctx: &egui::Context, label: &str) {
+    pub(super) fn pick_ron(&mut self, ctx: &egui::Context, label: &str, kind: FileKind) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(label, &["ron"])
             .pick_file()
@@ -179,25 +192,25 @@ impl Studio {
                 name: file_name(&path),
                 bytes: std::fs::read(&path).map_err(|error| error.to_string()),
                 path: Some(path),
-                is_scene: true,
+                kind,
             });
             ctx.request_repaint();
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn pick_scene(&mut self, ctx: &egui::Context, _label: &str) {
+    pub(super) fn pick_ron(&mut self, ctx: &egui::Context, _label: &str, kind: FileKind) {
         let incoming = Arc::clone(&self.incoming);
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match web::pick().await {
+            match web::pick(kind).await {
                 Ok(Some(result)) => incoming.lock().unwrap().push(result),
                 Ok(None) => {}
                 Err(error) => incoming.lock().unwrap().push(FileResult {
-                    name: DEFAULT_NAME.to_owned(),
+                    name: default_file_name(kind).to_owned(),
                     bytes: Err(format!("{error:?}")),
                     path: None,
-                    is_scene: true,
+                    kind,
                 }),
             }
             ctx.request_repaint();
@@ -205,11 +218,19 @@ impl Studio {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn default_file_name(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Scene => SCENE_FILE_NAME,
+        _ => "preset.light.ron",
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn write_scene(bytes: &[u8], label: &str) -> Result<(), String> {
+pub(super) fn write_ron(bytes: &[u8], label: &str, file_name: &str) -> Result<(), String> {
     let Some(path) = rfd::FileDialog::new()
         .add_filter(label, &["ron"])
-        .set_file_name(DEFAULT_NAME)
+        .set_file_name(file_name)
         .save_file()
     else {
         return Ok(());
@@ -241,8 +262,8 @@ fn write_scene_to_path(bytes: &[u8], mut path: PathBuf) -> std::io::Result<()> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn write_scene(bytes: &[u8], _label: &str) -> Result<(), String> {
-    web::download(bytes).map_err(|error| format!("{error:?}"))
+pub(super) fn write_ron(bytes: &[u8], _label: &str, file_name: &str) -> Result<(), String> {
+    web::download(bytes, file_name).map_err(|error| format!("{error:?}"))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -250,7 +271,7 @@ mod web {
     use wasm_bindgen::{JsCast, JsValue};
     use web_sys::{Blob, Document, HtmlAnchorElement, HtmlInputElement, Url};
 
-    use super::{DEFAULT_NAME, FileResult};
+    use super::{FileKind, FileResult};
 
     fn document() -> Result<Document, JsValue> {
         web_sys::window()
@@ -258,7 +279,7 @@ mod web {
             .ok_or_else(|| JsValue::from_str("browser document is unavailable"))
     }
 
-    pub async fn pick() -> Result<Option<FileResult>, JsValue> {
+    pub async fn pick(kind: FileKind) -> Result<Option<FileResult>, JsValue> {
         let document = document()?;
         let input: HtmlInputElement = document.create_element("input")?.dyn_into()?;
         input.set_type("file");
@@ -297,11 +318,11 @@ mod web {
             name: file.name(),
             path: None,
             bytes,
-            is_scene: true,
+            kind,
         }))
     }
 
-    pub fn download(bytes: &[u8]) -> Result<(), JsValue> {
+    pub fn download(bytes: &[u8], file_name: &str) -> Result<(), JsValue> {
         let document = document()?;
         let anchor: HtmlAnchorElement = document.create_element("a")?.dyn_into()?;
         let body = document
@@ -311,7 +332,7 @@ mod web {
         let blob = Blob::new_with_u8_array_sequence(&parts)?;
         let url = Url::create_object_url_with_blob(&blob)?;
         anchor.set_href(&url);
-        anchor.set_download(DEFAULT_NAME);
+        anchor.set_download(file_name);
         anchor.set_hidden(true);
         let clicked = body.append_child(&anchor).map(|_| {
             anchor.click();

@@ -221,25 +221,7 @@ impl SceneFile {
         let mut light_ids = BTreeSet::new();
         if self.lights.len() > MAX_LIGHTS
             || self.lights.iter().any(|light| {
-                !valid_id(light.id.0)
-                    || !light_ids.insert(light.id)
-                    || !light.color.is_finite()
-                    || !positive(light.distance)
-                    || ![
-                        light.intensity,
-                        light.azimuth,
-                        light.elevation,
-                        light.cone_angle,
-                        light.softness,
-                        light.shadow_softness,
-                    ]
-                    .into_iter()
-                    .all(f32::is_finite)
-                    || light.mask.as_ref().is_some_and(|mask| {
-                        !positive(mask.pattern_size)
-                            || pixel_count(mask.image.width, mask.image.height)
-                                != Some(mask.image.luminance.len())
-                    })
+                !valid_id(light.id.0) || !light_ids.insert(light.id) || !light.is_valid()
             })
         {
             return Err(SceneFileError::Invalid("lights"));
