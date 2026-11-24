@@ -308,8 +308,18 @@ impl SceneRenderer {
         size: [u32; 2],
         anti_aliasing: AntiAliasing,
     ) {
-        // Meshes and material textures: upload new models, drop models no
-        // longer drawn.
+        self.sync_meshes(device, frame);
+        self.prepare_draw_list(device, queue, frame);
+        let shadow_layout = ShadowLayout::new(frame);
+        self.write_globals(device, queue, frame, &shadow_layout);
+        self.draw_shadow_maps(queue, encoder, frame, &shadow_layout);
+        self.prepare_targets(device, queue, frame, size, anti_aliasing);
+        self.draw_scene_passes(encoder, frame);
+    }
+
+    /// Uploads the meshes of new models and drops those no longer drawn,
+    /// with their material textures.
+    fn sync_meshes(&mut self, device: &wgpu::Device, frame: &Frame) {
         let drawn = |id: ModelId| frame.objects.iter().any(|o| o.model_id == id);
         self.meshes.retain(|id, _| drawn(*id));
         self.materials.retain(drawn);
@@ -318,9 +328,11 @@ impl SceneRenderer {
                 .entry(object.model_id)
                 .or_insert_with(|| upload_mesh(device, &object.model));
         }
+    }
 
-        // One draw per part: its uniforms and its material.
-        let clay = ObjectColors::uniform(frame.clay_color);
+    /// One draw per part, with its uniforms and its material.
+    fn prepare_draw_list(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) {
+        let clay = ObjectColors::uniform(frame.shading.clay_color);
         let mut entries = Vec::new();
         let mut uniforms = Vec::new();
         for object in &frame.objects {
@@ -362,7 +374,7 @@ impl SceneRenderer {
                     model_id: object.model_id,
                     part: *part,
                     material: material.map(|m| (object.model_id, m)),
-                    one_sided: object.one_sided || frame.backface_culling,
+                    one_sided: object.one_sided || frame.shading.backface_culling,
                     casts_shadows: object.casts_shadows,
                     wireframe: part_index == 0 && !object.one_sided,
                 });
@@ -388,8 +400,16 @@ impl SceneRenderer {
             queue.write_buffer(&self.object_buffer, 0, &bytes);
         }
         self.draw_list = entries;
+    }
 
-        let shadow_layout = ShadowLayout::new(frame);
+    /// The frame's camera, room, shading and lights for the shaders.
+    fn write_globals(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &Frame,
+        shadow_layout: &ShadowLayout,
+    ) {
         let mask_layers = self.masks.prepare(queue, &frame.lights);
         let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
         let count = frame.lights.len().min(MAX_LIGHTS);
@@ -415,14 +435,15 @@ impl SceneRenderer {
             camera_right: frame.camera_right.extend(0.0).to_array(),
             camera_up: frame.camera_up.extend(0.0).to_array(),
             wire: frame
+                .shading
                 .lines
                 .wireframe_color
-                .extend(frame.lines.wireframe_opacity.clamp(0.0, 1.0))
+                .extend(frame.shading.lines.wireframe_opacity.clamp(0.0, 1.0))
                 .to_array(),
-            cavity: if frame.cavity.geometry {
+            cavity: if frame.shading.cavity.geometry {
                 [
-                    frame.cavity.geometry_ridge,
-                    frame.cavity.geometry_hollow,
+                    frame.shading.cavity.geometry_ridge,
+                    frame.shading.cavity.geometry_hollow,
                     0.0,
                     0.0,
                 ]
@@ -432,7 +453,16 @@ impl SceneRenderer {
             lights,
         };
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals));
+    }
 
+    /// Redraws the shadow atlas when a light or a caster changed.
+    fn draw_shadow_maps(
+        &mut self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &Frame,
+        shadow_layout: &ShadowLayout,
+    ) {
         let casters: Vec<(usize, &GpuMesh, MeshPart)> = self
             .draw_list
             .iter()
@@ -442,7 +472,7 @@ impl SceneRenderer {
             .collect();
         let (object_bind_group, object_stride) = (&self.object_bind_group, self.object_stride);
         self.shadows
-            .prepare(queue, encoder, frame, &shadow_layout, |pass| {
+            .prepare(queue, encoder, frame, shadow_layout, |pass| {
                 for (i, mesh, part) in &casters {
                     let offset = (*i as u64 * object_stride) as u32;
                     pass.set_bind_group(1, object_bind_group, &[offset]);
@@ -451,7 +481,17 @@ impl SceneRenderer {
                     pass.draw_indexed(part_range(part), 0, 0..1);
                 }
             });
+    }
 
+    /// Pipelines for the anti-aliasing and the scene's pictures at `size`.
+    fn prepare_targets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &Frame,
+        size: [u32; 2],
+        anti_aliasing: AntiAliasing,
+    ) {
         let anti_aliasing = anti_aliasing.normalized();
         if self.pipelines.samples != anti_aliasing.samples {
             self.pipelines = ScenePipelines::new(
@@ -462,9 +502,14 @@ impl SceneRenderer {
                 anti_aliasing.samples,
             );
         }
-        self.wireframe = frame.lines.wireframe && frame.lines.wireframe_opacity > 0.0;
+        self.wireframe =
+            frame.shading.lines.wireframe && frame.shading.lines.wireframe_opacity > 0.0;
         self.composite
             .prepare(device, queue, size, anti_aliasing, frame);
+    }
+
+    /// Draws the scene into its pictures, and the wireframe over it.
+    fn draw_scene_passes(&mut self, encoder: &mut wgpu::CommandEncoder, frame: &Frame) {
         let Some(target) = &self.composite.target else {
             return;
         };
@@ -554,7 +599,9 @@ impl SceneRenderer {
 
     /// How `frame`'s surfaces are lit, uploading its matcap if it uses one.
     fn shade_code(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) -> f32 {
-        match (frame.shading_mode, frame.solid, &frame.matcap) {
+        let shading = &frame.shading;
+        let matcap = shading.matcap.as_ref().map(|m| &m.image);
+        match (shading.mode, shading.solid, matcap) {
             (ShadingMode::Lit, ..) => SHADE_LIT,
             (ShadingMode::Solid, SolidLighting::Flat, _) => SHADE_FLAT,
             (ShadingMode::Solid, SolidLighting::Matcap, Some(image))

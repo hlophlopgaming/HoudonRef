@@ -101,7 +101,7 @@ impl HoudonApp {
 
         let localizer = Localizer::new(language);
         let mut studio = Studio::new();
-        studio.load_light_presets(&localizer);
+        studio.load_presets(&localizer);
         Self {
             localizer,
             section: settings.section,

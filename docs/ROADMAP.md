@@ -47,10 +47,11 @@ Done:
 - [x] Contour lines, wireframe and backface culling (#17).
 - [x] Scene files with optional model embedding on desktop and portable downloads on the web (#11).
 - [x] Light presets with built-ins, local storage, and RON import and export (#18).
+- [x] Camera presets (front, three-quarter, profile, from above, from below; framing the whole scene or the selection) and the artist's own camera and room presets (#18).
+- [x] A friendlier Studio: toolbar with Scene and Add menus, collapsible panel sections, file dialogs.
 
 Next:
 
-- [ ] Room and camera presets (#18).
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
 - [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
 

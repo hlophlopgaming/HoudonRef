@@ -10,11 +10,32 @@ use super::{Builtin, Studio, extension, file_name};
 
 const SCENE_FILE_NAME: &str = "scene.ron";
 
+/// What a file is for. A file picked in a dialog has the kind of the
+/// action that opened the dialog; a dropped file gets one by its extension.
 #[derive(Clone, Copy)]
 pub(super) enum FileKind {
+    /// Dropped: a model, or an image for a matcap or a light mask.
     ModelOrImage,
+    Model,
+    Mask,
+    Matcap,
     Scene,
     LightPreset,
+    CameraPreset,
+    RoomPreset,
+}
+
+impl FileKind {
+    /// The extensions a file dialog offers for this kind.
+    pub(super) fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Self::ModelOrImage => &["glb", "gltf", "png", "jpg", "jpeg", "exr"],
+            Self::Model => &["glb", "gltf"],
+            Self::Mask => &["png", "jpg", "jpeg"],
+            Self::Matcap => &["exr", "png", "jpg", "jpeg"],
+            Self::Scene | Self::LightPreset | Self::CameraPreset | Self::RoomPreset => &["ron"],
+        }
+    }
 }
 
 pub(super) struct FileResult {
@@ -148,20 +169,7 @@ impl Studio {
         }
     }
 
-    pub(super) fn scene_file_controls(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(tr.tr("scene-open")).clicked() {
-                self.pick_ron(ui.ctx(), &tr.tr("scene-file-type"), FileKind::Scene);
-            }
-            if ui.button(tr.tr("scene-save")).clicked() {
-                self.save_scene(tr);
-            }
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        ui.checkbox(&mut self.embed_models, tr.tr("scene-embed-models"));
-    }
-
-    fn save_scene(&mut self, tr: &Localizer) {
+    pub(super) fn save_scene(&mut self, tr: &Localizer) {
         let result = self
             .scene
             .to_ron(|id| {
@@ -183,9 +191,9 @@ impl Studio {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn pick_ron(&mut self, ctx: &egui::Context, label: &str, kind: FileKind) {
+    pub(super) fn pick_file(&mut self, ctx: &egui::Context, label: &str, kind: FileKind) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter(label, &["ron"])
+            .add_filter(label, kind.extensions())
             .pick_file()
         {
             self.incoming.lock().unwrap().push(FileResult {
@@ -199,7 +207,7 @@ impl Studio {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn pick_ron(&mut self, ctx: &egui::Context, _label: &str, kind: FileKind) {
+    pub(super) fn pick_file(&mut self, ctx: &egui::Context, _label: &str, kind: FileKind) {
         let incoming = Arc::clone(&self.incoming);
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -222,7 +230,10 @@ impl Studio {
 fn default_file_name(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Scene => SCENE_FILE_NAME,
-        _ => "preset.light.ron",
+        FileKind::LightPreset => "preset.light.ron",
+        FileKind::CameraPreset => "preset.camera.ron",
+        FileKind::RoomPreset => "preset.room.ron",
+        _ => "file",
     }
 }
 
@@ -283,7 +294,8 @@ mod web {
         let document = document()?;
         let input: HtmlInputElement = document.create_element("input")?.dyn_into()?;
         input.set_type("file");
-        input.set_accept(".ron");
+        let accept: Vec<String> = kind.extensions().iter().map(|e| format!(".{e}")).collect();
+        input.set_accept(&accept.join(","));
         input.set_hidden(true);
         let body = document
             .body()

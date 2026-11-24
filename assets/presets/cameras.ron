@@ -1,0 +1,9 @@
+// Built-in camera presets. Angles in radians; distance is a multiple of the
+// distance at which the framed objects just fit in view.
+[
+    (name: "front", yaw: 0.0, pitch: 0.0, focal_length_mm: 50.0, distance: 1.0),
+    (name: "three-quarter", yaw: 0.7853982, pitch: 0.1745329, focal_length_mm: 85.0, distance: 1.0),
+    (name: "profile", yaw: 1.5707964, pitch: 0.0, focal_length_mm: 85.0, distance: 1.0),
+    (name: "from-above", yaw: 0.5235988, pitch: 0.8726646, focal_length_mm: 35.0, distance: 1.0),
+    (name: "from-below", yaw: 0.2617994, pitch: -0.3490659, focal_length_mm: 24.0, distance: 1.0),
+]
