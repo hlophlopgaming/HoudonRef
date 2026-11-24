@@ -4,7 +4,6 @@ use super::*;
 
 impl Studio {
     pub(super) fn values_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-values"));
         let study = &mut self.scene.shading.value;
         let modes = [ValueMode::Off, ValueMode::Grey]
             .into_iter()
@@ -27,25 +26,38 @@ impl Studio {
             ui.add(egui::Slider::new(&mut study.balance, -1.0..=1.0).text(tr.tr("values-balance")));
         }
         ui.add(egui::Slider::new(&mut study.squint, 0.0..=1.0).text(tr.tr("values-squint")));
-        ui.weak(tr.tr("values-hint"));
+        ui.weak(tr.tr("values-key-hint"));
     }
 
+    /// The shading mode and its light, then the overlays drawn over it.
     pub(super) fn shading_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-shading"));
+        ui.label(tr.tr("studio-shading"));
         let shading = &mut self.scene.shading;
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(
-                &mut shading.mode,
-                ShadingMode::Solid,
-                tr.tr("shading-solid"),
-            );
-            ui.selectable_value(&mut shading.mode, ShadingMode::Lit, tr.tr("shading-lit"));
-            ui.add_enabled(
-                false,
-                egui::Button::selectable(false, tr.tr("shading-render")),
-            )
-            .on_disabled_hover_text(tr.tr("shading-render-later"));
-        });
+        shading_mode_buttons(ui, tr, &mut shading.mode);
+        if shading.mode == ShadingMode::Solid {
+            ui.horizontal_wrapped(|ui| {
+                for lighting in SolidLighting::ALL {
+                    ui.selectable_value(
+                        &mut shading.solid,
+                        lighting,
+                        tr.tr(solid_lighting_message_id(lighting)),
+                    );
+                }
+            });
+            if shading.solid == SolidLighting::Matcap {
+                ui.horizontal(|ui| {
+                    ui.label(tr.tr("studio-matcap"));
+                    let name = shading
+                        .matcap
+                        .as_ref()
+                        .map_or_else(|| tr.tr("studio-matcap-none"), |m| m.name.clone());
+                    if ui.button(name).clicked() {
+                        self.matcap_picker_open = true;
+                    }
+                });
+            }
+        }
+        ui.separator();
         cavity_controls(ui, tr, &mut shading.cavity);
         line_controls(ui, tr, &mut shading.lines);
         ui.checkbox(
@@ -53,34 +65,10 @@ impl Studio {
             tr.tr("studio-backface-culling"),
         )
         .on_hover_text(tr.tr("backface-culling-hint"));
-        if shading.mode != ShadingMode::Solid {
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            for lighting in SolidLighting::ALL {
-                ui.selectable_value(
-                    &mut shading.solid,
-                    lighting,
-                    tr.tr(solid_lighting_message_id(lighting)),
-                );
-            }
-        });
-        if shading.solid == SolidLighting::Matcap {
-            ui.horizontal(|ui| {
-                ui.label(tr.tr("studio-matcap"));
-                let name = shading
-                    .matcap
-                    .as_ref()
-                    .map_or_else(|| tr.tr("studio-matcap-none"), |m| m.name.clone());
-                if ui.button(name).clicked() {
-                    self.matcap_picker_open = true;
-                }
-            });
-        }
     }
 
     pub(super) fn color_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-color-source"));
+        ui.label(tr.tr("studio-color-source"));
         let shading = &mut self.scene.shading;
         ui.horizontal_wrapped(|ui| {
             for source in ColorSource::ALL {
@@ -178,4 +166,19 @@ pub(super) fn cavity_controls(ui: &mut egui::Ui, tr: &Localizer, cavity: &mut Ca
             });
         }
     }
+}
+
+/// Solid, Lit, and Render shown as coming later.
+pub(super) fn shading_mode_buttons(ui: &mut egui::Ui, tr: &Localizer, mode: &mut ShadingMode) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(mode, ShadingMode::Solid, tr.tr("shading-solid"))
+            .on_hover_text(tr.tr("shading-solid-hint"));
+        ui.selectable_value(mode, ShadingMode::Lit, tr.tr("shading-lit"))
+            .on_hover_text(tr.tr("shading-lit-hint"));
+        ui.add_enabled(
+            false,
+            egui::Button::selectable(false, tr.tr("shading-render")),
+        )
+        .on_disabled_hover_text(tr.tr("shading-render-later"));
+    });
 }

@@ -164,7 +164,7 @@ impl Studio {
             }
         }
         if open_picker {
-            self.pick_ron(
+            self.pick_file(
                 ui.ctx(),
                 &tr.tr("light-preset-file-type"),
                 FileKind::LightPreset,

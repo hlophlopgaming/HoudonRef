@@ -30,6 +30,9 @@ impl Studio {
                         });
                     });
                 ui.separator();
+                if ui.button(tr.tr("matcap-open-file")).clicked() {
+                    self.pick_file(ctx, &tr.tr("image-file-type"), FileKind::Matcap);
+                }
                 ui.weak(tr.tr("matcap-picker-hint"));
                 ui.weak(tr.tr("matcap-credit"));
                 if let Some(name) = chosen
@@ -109,6 +112,9 @@ impl Studio {
                         });
                     });
                 ui.separator();
+                if ui.button(tr.tr("mask-open-file")).clicked() {
+                    self.pick_file(ctx, &tr.tr("image-file-type"), FileKind::Mask);
+                }
                 ui.weak(tr.tr("mask-picker-hint"));
                 ui.weak(tr.tr("mask-credit"));
                 if let (Some(name), Some(light)) = (chosen, self.selected_light) {

@@ -19,17 +19,8 @@ impl Studio {
     }
 
     pub(super) fn objects_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-objects"));
-        ui.horizontal_wrapped(|ui| {
-            for builtin in Builtin::ALL {
-                if ui.button(tr.tr(builtin.add_message_id())).clicked() {
-                    self.add_builtin(builtin);
-                }
-            }
-        });
-        ui.label(tr.tr("studio-drop-hint"));
-        if let Some(message) = &self.message {
-            ui.colored_label(ui.visuals().warn_fg_color, message);
+        if self.scene.object_count() == 0 {
+            ui.weak(tr.tr("studio-no-objects"));
         }
 
         // Number objects of the same model: "male figure 1", "male figure 2", …
@@ -79,7 +70,7 @@ impl Studio {
     }
 
     pub(super) fn selected_object_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-selected-object"));
+        ui.label(egui::RichText::new(tr.tr("studio-selected-object")).strong());
         let Some(id) = self.scene.selected() else {
             ui.weak(tr.tr("studio-no-selection"));
             return;

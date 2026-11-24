@@ -4,19 +4,17 @@ use super::*;
 
 impl Studio {
     pub(super) fn lights_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-lights"));
         self.light_presets_ui(ui, tr);
         let can_add = self.scene.lights().len() < MAX_LIGHTS;
-        ui.horizontal_wrapped(|ui| {
-            for kind in LightKind::ALL {
-                let label = tr.tr_args(
-                    "studio-add-light",
-                    &[("kind", tr.tr(light_kind_message_id(kind)).into())],
-                );
-                if ui.add_enabled(can_add, egui::Button::new(label)).clicked() {
-                    self.selected_light = self.scene.add_light(kind);
+        ui.add_enabled_ui(can_add, |ui| {
+            ui.menu_button(tr.tr("studio-add-light-menu"), |ui| {
+                for kind in LightKind::ALL {
+                    if ui.button(tr.tr(light_kind_message_id(kind))).clicked() {
+                        self.selected_light = self.scene.add_light(kind);
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
         if !can_add {
             ui.weak(tr.tr_args("studio-lights-full", &[("count", MAX_LIGHTS.into())]));

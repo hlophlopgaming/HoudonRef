@@ -64,19 +64,27 @@ impl Builtin {
         }
     }
 
-    /// Message id of the button that adds the model.
-    pub(super) fn add_message_id(self) -> &'static str {
+    /// Translated name shown in the objects list.
+    /// The Add menu's item.
+    pub(super) fn menu_message_id(self) -> &'static str {
         match self {
-            Self::Male => "studio-add-male",
-            Self::Female => "studio-add-female",
-            Self::AsaroHead => "studio-add-asaro-head",
-            Self::PlanarHead => "studio-add-planar-head",
-            Self::BaseHead => "studio-add-base-head",
-            Self::WolfsaroHead => "studio-add-wolfsaro-head",
+            Self::Male => "menu-male-figure",
+            Self::Female => "menu-female-figure",
+            Self::AsaroHead => "menu-asaro-head",
+            Self::PlanarHead => "menu-planar-head",
+            Self::BaseHead => "menu-base-head",
+            Self::WolfsaroHead => "menu-wolfsaro-head",
         }
     }
 
-    /// Translated name shown in the objects list.
+    /// The Add menu's group, as a message id: figures or heads.
+    pub(super) fn group(self) -> &'static str {
+        match self {
+            Self::Male | Self::Female => "menu-figures",
+            _ => "menu-heads",
+        }
+    }
+
     pub(super) fn message_id(self) -> &'static str {
         match self {
             Self::Male => "model-male-figure",

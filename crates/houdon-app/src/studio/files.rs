@@ -21,6 +21,17 @@ impl Studio {
             "png" | "jpg" | "jpeg" => return self.load_mask_file(name, &bytes, tr),
             _ => {}
         }
+        self.load_model_file(name, path, bytes, tr);
+    }
+
+    /// Adds an object of the model in a glTF or GLB file.
+    pub(super) fn load_model_file(
+        &mut self,
+        name: &str,
+        path: Option<PathBuf>,
+        bytes: Vec<u8>,
+        tr: &Localizer,
+    ) {
         let asset = ModelAsset::imported(path, bytes);
         if let Err(error) = self.add_object_from(name, asset, None, Transform::default()) {
             self.message = Some(tr.tr_args(
@@ -97,7 +108,12 @@ impl Studio {
                         figure_height = Some(self.scene.figure_height());
                     }
                 }
-                Ok(bytes) => self.load_file(&name, path, bytes, tr),
+                Ok(bytes) => match kind {
+                    FileKind::Model => self.load_model_file(&name, path, bytes, tr),
+                    FileKind::Mask => self.load_mask_file(&name, &bytes, tr),
+                    FileKind::Matcap => self.load_matcap_file(&name, &bytes, tr),
+                    _ => self.load_file(&name, path, bytes, tr),
+                },
                 Err(error) => {
                     log::warn!("reading {name} failed: {error}");
                     self.message = Some(tr.tr_args("error-read-failed", &[("name", name.into())]));

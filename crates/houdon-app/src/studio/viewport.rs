@@ -53,7 +53,7 @@ impl Studio {
         }
     }
 
-    pub(super) fn viewport(&mut self, ui: &mut egui::Ui, _tr: &Localizer) {
+    pub(super) fn viewport(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let aspect = rect.width() / rect.height().max(1.0);
@@ -126,6 +126,16 @@ impl Studio {
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);
+        if self.scene.object_count() == 0 {
+            // An empty scene says how to begin.
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                tr.tr("studio-empty-viewport"),
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
     }
 }
 

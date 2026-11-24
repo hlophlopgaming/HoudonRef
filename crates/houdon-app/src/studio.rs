@@ -17,6 +17,7 @@ use crate::masks::{self, MaskLibrary};
 use crate::matcaps::{self, MatcapLibrary};
 
 mod builtins;
+mod camera;
 mod display;
 mod files;
 mod light_presets;
@@ -24,6 +25,7 @@ mod lights;
 mod objects;
 mod pickers;
 mod scene_files;
+mod toolbar;
 mod viewport;
 mod widgets;
 use builtins::Builtin;
@@ -162,7 +164,19 @@ impl Studio {
                 egui::ScrollArea::vertical().show(ui, |ui| self.side_panel(ui, tr));
             });
 
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, tr));
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            // Toolbar, message and picture without gaps between them.
+            ui.spacing_mut().item_spacing.y = 0.0;
+            egui::Frame::new()
+                .fill(ui.visuals().panel_fill)
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    self.toolbar(ui, tr);
+                });
+            self.message_banner(ui);
+            self.viewport(ui, tr);
+        });
 
         for name in self.masks.poll() {
             if let Some((light, pending)) = self.pending_mask
@@ -180,118 +194,45 @@ impl Studio {
         }
     }
 
+    /// The side panel: one collapsible section per part of the scene. The
+    /// ones used most start open.
     fn side_panel(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.add_space(6.0);
-        self.scene_file_controls(ui, tr);
-        ui.separator();
-        self.objects_section(ui, tr);
-        ui.separator();
-        self.selected_object_section(ui, tr);
-
-        ui.separator();
-        ui.strong(tr.tr("studio-camera"));
-        let mut focal = self.scene.camera.focal_length_mm;
-        let slider = egui::Slider::new(
-            &mut focal,
-            OrbitCamera::MIN_FOCAL_LENGTH_MM..=OrbitCamera::MAX_FOCAL_LENGTH_MM,
-        )
-        .logarithmic(true)
-        .suffix(format!(" {}", tr.tr("unit-millimetre-short")))
-        .text(tr.tr("studio-focal-length"));
-        if ui.add(slider).changed() {
-            self.scene.camera.set_focal_length_keep_framing(focal);
-        }
-        let camera = &mut self.scene.camera;
-        // Shown around the front (0°) from -180° to 180°.
-        let mut direction = snap_to_zero(wrap_degrees(camera.yaw.to_degrees()));
-        if ui
-            .add(
-                egui::Slider::new(&mut direction, -180.0..=180.0)
-                    .suffix("°")
-                    .text(tr.tr("studio-camera-direction")),
-            )
-            .changed()
-        {
-            camera.yaw = direction.to_radians();
-        }
-        let mut height = snap_to_zero(camera.pitch.to_degrees());
-        let pitch_range = OrbitCamera::MIN_PITCH.to_degrees()..=OrbitCamera::MAX_PITCH.to_degrees();
-        if ui
-            .add(
-                egui::Slider::new(&mut height, pitch_range)
-                    .suffix("°")
-                    .text(tr.tr("studio-camera-height")),
-            )
-            .changed()
-        {
-            camera.pitch = height.to_radians();
-        }
-        ui.horizontal(|ui| {
-            length_field(
-                ui,
-                tr,
-                self.units,
-                &mut camera.distance,
-                OrbitCamera::MIN_DISTANCE..=OrbitCamera::MAX_DISTANCE,
-            );
-            ui.label(tr.tr("studio-camera-distance"));
+        ui.add_space(4.0);
+        section(ui, tr, "studio-objects", true, |ui| {
+            self.objects_section(ui, tr);
+            ui.add_space(4.0);
+            self.selected_object_section(ui, tr);
         });
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(tr.tr("studio-frame-scene")).clicked() {
-                self.pending_frame = Some(FrameTarget::Scene);
-            }
-            let has_selection = self.scene.selected().is_some();
-            if ui
-                .add_enabled(
-                    has_selection,
-                    egui::Button::new(tr.tr("studio-frame-selected")),
-                )
-                .clicked()
-            {
-                self.pending_frame = Some(FrameTarget::Selected);
-            }
+        section(ui, tr, "studio-lights", true, |ui| {
+            self.lights_section(ui, tr)
         });
-        ui.weak(tr.tr("studio-camera-hint"));
-
-        ui.separator();
-        self.lights_section(ui, tr);
-        ui.separator();
-        self.shading_section(ui, tr);
-        ui.separator();
-        self.color_section(ui, tr);
-        ui.separator();
-        self.values_section(ui, tr);
-        ui.separator();
-        self.room_section(ui, tr);
+        section(ui, tr, "studio-camera", false, |ui| {
+            self.camera_section(ui, tr)
+        });
+        section(ui, tr, "studio-display", false, |ui| {
+            self.shading_section(ui, tr);
+            ui.separator();
+            self.color_section(ui, tr);
+        });
+        section(ui, tr, "studio-values", false, |ui| {
+            self.values_section(ui, tr)
+        });
+        section(ui, tr, "studio-room", false, |ui| self.room_section(ui, tr));
     }
+}
 
-    fn room_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
-        ui.strong(tr.tr("studio-room"));
-        ui.horizontal_wrapped(|ui| {
-            for builtin in BuiltinRoom::ALL {
-                if ui.button(tr.tr(builtin_room_message_id(builtin))).clicked() {
-                    self.scene.use_builtin_room(builtin);
-                }
-            }
-        });
-        let room = &mut self.scene.room;
-        ui.checkbox(&mut room.visible, tr.tr("studio-room-visible"));
-        for (color, label) in [
-            (&mut room.floor_color, "studio-room-floor"),
-            (&mut room.backdrop_color, "studio-room-backdrop"),
-        ] {
-            ui.horizontal(|ui| {
-                let mut rgb = color.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    *color = glam::Vec3::from(rgb);
-                }
-                ui.label(tr.tr(label));
-            });
-        }
-        ui.add(
-            egui::Slider::new(&mut room.ambient_intensity, 0.0..=2.0).text(tr.tr("studio-ambient")),
-        );
-    }
+/// A collapsible section of the side panel, titled by message `title`.
+fn section(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    title: &str,
+    open: bool,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::CollapsingHeader::new(egui::RichText::new(tr.tr(title)).strong())
+        .id_salt(title)
+        .default_open(open)
+        .show(ui, add_contents);
 }
 
 #[cfg(test)]

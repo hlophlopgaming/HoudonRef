@@ -12,8 +12,6 @@ atelier-coming = Ателье для рисования в работе: сес�
 model-stats = Треугольников: { $triangles }
 
 studio-objects = Объекты
-studio-add-male = Добавить мужскую фигуру (тест)
-studio-add-female = Добавить женскую фигуру (тест)
 studio-object-duplicate = Дублировать
 studio-object-delete = Удалить
 studio-frame-scene = Показать всю сцену
@@ -23,7 +21,13 @@ studio-no-selection = Щёлкните объект в окне или в спи
 studio-position = Положение
 studio-rotation = Поворот
 studio-size = Размер
-studio-camera-hint = Тяните мышью, чтобы вращать; правой кнопкой или с Shift, чтобы сдвигать; колесом, чтобы приближать. Щелчок выделяет, двойной щелчок показывает целиком, Delete удаляет.
+studio-camera-hint =
+    Тянуть мышью: вращать вокруг сцены
+    Правой кнопкой или Shift + тянуть: сдвигать
+    Колесо или щипок: ближе или дальше
+    Щелчок: выделить · двойной щелчок: показать целиком
+    Delete: удалить выделенный объект
+    V: включить и выключить тональный разбор
 studio-drop-hint = Перетащите файл .glb или .gltf в окно, чтобы добавить его.
 
 studio-camera = Камера
@@ -68,7 +72,6 @@ unit-foot-short = фут
 length = { $value } { $unit }
 
 studio-lights = Свет
-studio-add-light = + { $kind }
 studio-lights-full = В сцене может быть не больше { $count } источников.
 studio-light-label = { $number }. { $kind }
 studio-light-remove = Удалить
@@ -157,15 +160,10 @@ values-tones = { $count ->
 }
 values-balance = Баланс света и тени
 values-squint = Прищур
-values-hint = V во вьюпорте включает и выключает тональный разбор.
 
-studio-add-asaro-head = Добавить голову Асаро
-studio-add-planar-head = Добавить планарную голову
 model-asaro-head = голова Асаро
 model-planar-head = планарная голова
-studio-add-base-head = Добавить базовую голову
 model-base-head = базовая голова
-studio-add-wolfsaro-head = Добавить голову волка (Wolfsaro)
 model-wolfsaro-head = голова волка
 
 light-presets = Пресеты света
@@ -190,3 +188,30 @@ light-preset-load-error = Не удалось прочитать сохранё�
 light-preset-save-error = Не удалось сохранить пресет света: { $reason }
 light-preset-import-error = Не удалось импортировать пресет света: { $reason }
 light-preset-export-error = Не удалось экспортировать пресет света: { $reason }
+
+toolbar-scene = Сцена
+toolbar-add = Добавить
+toolbar-open-model = Открыть файл модели…
+toolbar-values = Тоны
+toolbar-frame-scene-hint = Показать всю сцену (двойной щелчок по пустому месту)
+toolbar-frame-selected-hint = Показать выделенный объект (двойной щелчок по нему)
+toolbar-help = Мышь и клавиши
+menu-figures = Фигуры
+menu-heads = Головы
+menu-male-figure = Мужская фигура (тест)
+menu-female-figure = Женская фигура (тест)
+menu-asaro-head = Голова Асаро
+menu-planar-head = Планарная голова
+menu-base-head = Базовая голова
+menu-wolfsaro-head = Голова волка (Wolfsaro)
+model-file-type = 3D-модели
+image-file-type = Изображения
+studio-display = Отображение
+studio-no-objects = Объектов пока нет: добавьте их через «Добавить» на панели над окном.
+studio-empty-viewport = Добавьте модель: меню «Добавить» сверху или перетащите сюда файл .glb или .gltf.
+studio-add-light-menu = + Добавить свет
+shading-solid-hint = Постоянный свет, чтобы читать форму; свет сцены не учитывается.
+shading-lit-hint = Свет сцены, тени и окружение.
+values-key-hint = Клавиша V над окном включает и выключает тональный разбор.
+mask-open-file = Открыть свою картинку…
+matcap-open-file = Открыть свой мэткап…

@@ -12,8 +12,6 @@ atelier-coming = The drawing atelier is coming: timed sessions that go from a Lo
 model-stats = { $triangles } triangles
 
 studio-objects = Objects
-studio-add-male = Add male figure (test)
-studio-add-female = Add female figure (test)
 studio-object-duplicate = Duplicate
 studio-object-delete = Delete
 studio-frame-scene = Frame scene
@@ -23,7 +21,13 @@ studio-no-selection = Click an object in the view or in the list to select it.
 studio-position = Position
 studio-rotation = Rotation
 studio-size = Size
-studio-camera-hint = Drag to orbit, right-drag or Shift-drag to pan, scroll to move closer. Click to select, double-click to frame, Delete to remove.
+studio-camera-hint =
+    Drag: orbit around the scene
+    Right-drag or Shift + drag: pan
+    Wheel or pinch: move closer or farther
+    Click: select · double-click: frame it
+    Delete: remove the selected object
+    V: value study on and off
 studio-drop-hint = Drop a .glb or .gltf file onto the window to add it.
 
 studio-camera = Camera
@@ -68,7 +72,6 @@ unit-foot-short = ft
 length = { $value } { $unit }
 
 studio-lights = Lights
-studio-add-light = + { $kind }
 studio-lights-full = A scene holds up to { $count } lights.
 studio-light-label = { $number }. { $kind }
 studio-light-remove = Remove
@@ -153,15 +156,10 @@ values-grey = Grey
 values-tones = { $count } tones
 values-balance = Light / shadow balance
 values-squint = Squint
-values-hint = V in the viewport turns the study on and off.
 
-studio-add-asaro-head = Add Asaro head
-studio-add-planar-head = Add planar head
 model-asaro-head = Asaro head
 model-planar-head = planar head
-studio-add-base-head = Add base head
 model-base-head = base head
-studio-add-wolfsaro-head = Add Wolfsaro head (canine)
 model-wolfsaro-head = Wolfsaro head
 
 light-presets = Light presets
@@ -186,3 +184,30 @@ light-preset-load-error = Could not read the saved light presets: { $reason }
 light-preset-save-error = Could not save the light preset: { $reason }
 light-preset-import-error = Could not import the light preset: { $reason }
 light-preset-export-error = Could not export the light preset: { $reason }
+
+toolbar-scene = Scene
+toolbar-add = Add
+toolbar-open-model = Open a model file…
+toolbar-values = Values
+toolbar-frame-scene-hint = Fit the whole scene in view (double-click on empty space)
+toolbar-frame-selected-hint = Fit the selected object in view (double-click it)
+toolbar-help = Mouse and keyboard
+menu-figures = Figures
+menu-heads = Heads
+menu-male-figure = Male figure (test)
+menu-female-figure = Female figure (test)
+menu-asaro-head = Asaro head
+menu-planar-head = Planar head
+menu-base-head = Base head
+menu-wolfsaro-head = Wolfsaro head (canine)
+model-file-type = 3D models
+image-file-type = Images
+studio-display = Display
+studio-no-objects = No objects yet: use Add in the toolbar.
+studio-empty-viewport = Add a model: the Add menu above, or drop a .glb or .gltf file here.
+studio-add-light-menu = + Add light
+shading-solid-hint = A fixed light for reading form; the scene's lights are ignored.
+shading-lit-hint = The scene's lights, shadows and room.
+values-key-hint = V over the viewport turns the value study on and off.
+mask-open-file = Open my own image…
+matcap-open-file = Open my own matcap…
