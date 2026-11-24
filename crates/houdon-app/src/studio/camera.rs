@@ -4,6 +4,60 @@ use super::*;
 
 impl Studio {
     pub(super) fn camera_section(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+        // Built-in viewpoints, one click each.
+        ui.horizontal_wrapped(|ui| {
+            for preset in CameraPreset::built_ins() {
+                let label = tr.tr(&format!("camera-preset-{}", preset.name()));
+                let hint = tr.tr_args(
+                    "camera-preset-lens",
+                    &[("mm", (preset.focal_length_mm().round() as i64).into())],
+                );
+                if ui.button(label).on_hover_text(hint).clicked() {
+                    preset.apply(&mut self.scene, self.camera_target, self.view_aspect);
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(tr.tr("camera-target"));
+            ui.selectable_value(
+                &mut self.camera_target,
+                CameraTarget::Scene,
+                tr.tr("camera-target-scene"),
+            );
+            ui.selectable_value(
+                &mut self.camera_target,
+                CameraTarget::Selected,
+                tr.tr("camera-target-selected"),
+            );
+        });
+        let mut action = None;
+        egui::CollapsingHeader::new(tr.tr("camera-presets-mine"))
+            .id_salt("camera-presets-mine")
+            .show(ui, |ui| action = self.camera_presets.ui(ui, tr));
+        match action {
+            Some(PresetAction::Apply(preset)) => {
+                preset.apply(&mut self.scene, self.camera_target, self.view_aspect);
+            }
+            Some(PresetAction::SaveCurrent(name)) => {
+                let bounds = self.scene.framing_bounds(self.camera_target);
+                match CameraPreset::from_camera(
+                    &name,
+                    &self.scene.camera,
+                    &bounds,
+                    self.view_aspect,
+                ) {
+                    Ok(preset) => {
+                        self.camera_presets.keep(preset, tr);
+                    }
+                    Err(error) => self.camera_presets.report(Err(error.to_string()), tr),
+                }
+            }
+            Some(PresetAction::Import) => {
+                self.pick_file(ui.ctx(), &tr.tr("preset-file-type"), FileKind::CameraPreset);
+            }
+            None => {}
+        }
+        ui.separator();
         let mut focal = self.scene.camera.focal_length_mm;
         let slider = egui::Slider::new(
             &mut focal,
@@ -77,5 +131,24 @@ impl Studio {
         ui.add(
             egui::Slider::new(&mut room.ambient_intensity, 0.0..=2.0).text(tr.tr("studio-ambient")),
         );
+        let mut action = None;
+        egui::CollapsingHeader::new(tr.tr("room-presets-mine"))
+            .id_salt("room-presets-mine")
+            .show(ui, |ui| action = self.room_presets.ui(ui, tr));
+        match action {
+            Some(PresetAction::Apply(preset)) => preset.apply(&mut self.scene),
+            Some(PresetAction::SaveCurrent(name)) => {
+                match RoomPreset::new(&name, self.scene.room) {
+                    Ok(preset) => {
+                        self.room_presets.keep(preset, tr);
+                    }
+                    Err(error) => self.room_presets.report(Err(error.to_string()), tr),
+                }
+            }
+            Some(PresetAction::Import) => {
+                self.pick_file(ui.ctx(), &tr.tr("preset-file-type"), FileKind::RoomPreset);
+            }
+            None => {}
+        }
     }
 }

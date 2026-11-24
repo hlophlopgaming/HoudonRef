@@ -51,6 +51,10 @@ impl Studio {
             let name = file_name(file.path());
             let kind = match extension(&name).as_str() {
                 "ron" if name.to_ascii_lowercase().ends_with(".light.ron") => FileKind::LightPreset,
+                "ron" if name.to_ascii_lowercase().ends_with(".camera.ron") => {
+                    FileKind::CameraPreset
+                }
+                "ron" if name.to_ascii_lowercase().ends_with(".room.ron") => FileKind::RoomPreset,
                 "ron" => FileKind::Scene,
                 "glb" | "gltf" | "png" | "jpg" | "jpeg" | "exr" => FileKind::ModelOrImage,
                 "blend" => {
@@ -98,9 +102,20 @@ impl Studio {
             kind,
         } in ready
         {
-            if matches!(kind, FileKind::LightPreset) {
-                self.light_presets.import(bytes, tr);
-                continue;
+            match kind {
+                FileKind::LightPreset => {
+                    self.light_presets.import(bytes, tr);
+                    continue;
+                }
+                FileKind::CameraPreset => {
+                    self.camera_presets.import(bytes, tr);
+                    continue;
+                }
+                FileKind::RoomPreset => {
+                    self.room_presets.import(bytes, tr);
+                    continue;
+                }
+                _ => {}
             }
             match bytes {
                 Ok(bytes) if matches!(kind, FileKind::Scene) => {

@@ -21,6 +21,8 @@ pub(super) enum FileKind {
     Matcap,
     Scene,
     LightPreset,
+    CameraPreset,
+    RoomPreset,
 }
 
 impl FileKind {
@@ -31,7 +33,7 @@ impl FileKind {
             Self::Model => &["glb", "gltf"],
             Self::Mask => &["png", "jpg", "jpeg"],
             Self::Matcap => &["exr", "png", "jpg", "jpeg"],
-            Self::Scene | Self::LightPreset => &["ron"],
+            Self::Scene | Self::LightPreset | Self::CameraPreset | Self::RoomPreset => &["ron"],
         }
     }
 }
@@ -229,6 +231,8 @@ fn default_file_name(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Scene => SCENE_FILE_NAME,
         FileKind::LightPreset => "preset.light.ron",
+        FileKind::CameraPreset => "preset.camera.ron",
+        FileKind::RoomPreset => "preset.room.ron",
         _ => "file",
     }
 }

@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
-    BuiltinRoom, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind,
-    LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap, MatcapImage, ModelId, OrbitCamera,
-    PLAUSIBLE_SIZE, Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
+    BuiltinRoom, CameraPreset, CameraTarget, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit,
+    Light, LightId, LightKind, LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap,
+    MatcapImage, ModelId, OrbitCamera, PLAUSIBLE_SIZE, RoomPreset, Scene, ShadingMode,
+    SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};
@@ -24,6 +25,7 @@ mod light_presets;
 mod lights;
 mod objects;
 mod pickers;
+mod presets;
 mod scene_files;
 mod toolbar;
 mod viewport;
@@ -31,6 +33,7 @@ mod widgets;
 use builtins::Builtin;
 use files::{extension, file_name};
 use light_presets::LightPresets;
+use presets::{PresetAction, SavedPresets};
 use scene_files::{FileKind, FileResult, ModelAsset};
 pub use widgets::length_field;
 use widgets::*;
@@ -67,6 +70,12 @@ pub struct Studio {
     matcap_picker_open: bool,
     embed_models: bool,
     light_presets: LightPresets,
+    camera_presets: SavedPresets<CameraPreset>,
+    room_presets: SavedPresets<RoomPreset>,
+    /// What camera presets frame.
+    camera_target: CameraTarget,
+    /// The viewport's width over its height, last drawn.
+    view_aspect: f32,
 }
 
 impl Studio {
@@ -88,6 +97,10 @@ impl Studio {
             matcap_picker_open: false,
             embed_models: cfg!(target_arch = "wasm32"),
             light_presets: LightPresets::default(),
+            camera_presets: SavedPresets::default(),
+            room_presets: SavedPresets::default(),
+            camera_target: CameraTarget::Scene,
+            view_aspect: 1.5,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);

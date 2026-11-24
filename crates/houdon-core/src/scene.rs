@@ -553,13 +553,19 @@ impl Scene {
         self.camera.frame(&bounds, aspect);
     }
 
+    /// What a camera preset frames: every object, or the selected one
+    /// (every object when none is selected).
+    pub fn framing_bounds(&self, target: crate::CameraTarget) -> Bounds {
+        match (target, self.selected.and_then(|id| self.object(id))) {
+            (crate::CameraTarget::Selected, Some(object)) => self.object_bounds(object),
+            _ => self.bounds(),
+        }
+    }
+
     /// Points the camera at the selected object, or at the whole scene when
     /// nothing is selected.
     pub fn frame_selected(&mut self, aspect: f32) {
-        let bounds = match self.selected.and_then(|id| self.object(id)) {
-            Some(object) => self.object_bounds(object),
-            None => self.bounds(),
-        };
+        let bounds = self.framing_bounds(crate::CameraTarget::Selected);
         self.camera.frame(&bounds, aspect);
     }
 

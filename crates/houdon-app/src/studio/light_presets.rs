@@ -73,8 +73,11 @@ impl LightPresets {
 }
 
 impl Studio {
-    pub(crate) fn load_light_presets(&mut self, tr: &Localizer) {
+    /// Loads the built-in presets and the artist's saved ones.
+    pub(crate) fn load_presets(&mut self, tr: &Localizer) {
         self.light_presets.load(tr);
+        self.camera_presets.load(tr);
+        self.room_presets.load(tr);
     }
 
     pub(super) fn light_presets_ui(&mut self, ui: &mut egui::Ui, tr: &Localizer) {

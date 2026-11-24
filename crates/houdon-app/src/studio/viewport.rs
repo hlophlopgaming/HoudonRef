@@ -57,6 +57,7 @@ impl Studio {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let aspect = rect.width() / rect.height().max(1.0);
+        self.view_aspect = aspect;
 
         if self.scene.object_count() > 0 {
             match self.pending_frame.take() {

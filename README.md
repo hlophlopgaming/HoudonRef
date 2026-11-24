@@ -49,8 +49,8 @@ cargo test --workspace
 
 ## Saving Studio scenes
 
-Use **Save scene** and **Open scene** in Studio, or drop a `.ron` file onto
-the window to open it. Desktop saves normally reference the original model
+In the Studio toolbar, use **Scene → Save scene** and **Scene → Open scene**,
+or drop a `.ron` file onto the window to open it. Desktop saves normally reference the original model
 paths. Enable **Embed models in scene file** to share the scene without
 those files. Browser downloads always embed the models. A missing model
 is reported when opening a scene, and the remaining objects still load.
@@ -61,6 +61,16 @@ Under **Lights → Light presets**, choose a preset and select **Apply**.
 Name the current lights and select **Save current lights** to reuse them
 in other scenes. **Export…** writes a portable `.light.ron` file with its
 masks. Open it with **Import…** or drop it onto the Studio.
+
+## Camera and room presets
+
+Under **Camera**, the buttons Front, Three-quarter, Profile, From above
+and From below each set a direction, height and lens, and frame the whole
+scene or the selected object, so a figure and a skull are framed alike.
+**My camera presets** saves the current view relative to what it frames;
+**Room → My rooms** saves the floor, backdrop and ambient light. Both
+export to `.camera.ron` and `.room.ron` files, which **Import…** or a
+drop onto the Studio brings back.
 
 ## Credits
 
