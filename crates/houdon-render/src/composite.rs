@@ -236,7 +236,8 @@ impl Composite {
         anti_aliasing: AntiAliasing,
         frame: &Frame,
     ) {
-        let (value, cavity, lines) = (&frame.value, &frame.cavity, &frame.lines);
+        let shading = &frame.shading;
+        let (value, cavity, lines) = (&shading.value, &shading.cavity, &shading.lines);
         let max = device.limits().max_texture_dimension_2d;
         let scale = anti_aliasing.supersample;
         let size = output_size.map(|side| (side.max(1) * scale).min(max));
