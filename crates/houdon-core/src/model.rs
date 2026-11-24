@@ -383,8 +383,12 @@ impl Model {
                 None => smooth_normals(&positions, &indices),
             };
 
-            let uvs: Vec<[f32; 2]> = match reader.read_tex_coords(0) {
-                Some(uvs) => uvs.into_f32().collect(),
+            let (uv_set, uv_transform) = uv_mapping(&primitive.material());
+            let uvs: Vec<[f32; 2]> = match reader
+                .read_tex_coords(uv_set)
+                .or_else(|| reader.read_tex_coords(0))
+            {
+                Some(uvs) => uvs.into_f32().map(uv_transform).collect(),
                 None => vec![[0.0; 2]; positions.len()],
             };
             if uvs.len() != positions.len() {
@@ -425,11 +429,67 @@ impl Model {
     }
 }
 
+/// The base colour texture of a glTF material: the metallic-roughness one,
+/// or the diffuse texture of a specular-glossiness material.
+fn base_color_info<'a>(material: &gltf::Material<'a>) -> Option<gltf::texture::Info<'a>> {
+    material
+        .pbr_metallic_roughness()
+        .base_color_texture()
+        .or_else(|| {
+            material
+                .pbr_specular_glossiness()
+                .and_then(|sg| sg.diffuse_texture())
+        })
+}
+
+/// Which UV set a primitive's textures read, and how the UVs are moved
+/// first (KHR_texture_transform), both as the base colour texture says.
+/// The move is baked into the mesh's UVs, so every texture of the part
+/// takes it.
+fn uv_mapping(material: &gltf::Material) -> (u32, impl Fn([f32; 2]) -> [f32; 2] + use<>) {
+    let info = base_color_info(material);
+    let mut set = info.as_ref().map_or(0, |info| info.tex_coord());
+    let (offset, rotation, scale) = match info.as_ref().and_then(|info| info.texture_transform()) {
+        Some(transform) => {
+            if let Some(override_set) = transform.tex_coord() {
+                set = override_set;
+            }
+            (transform.offset(), transform.rotation(), transform.scale())
+        }
+        None => ([0.0; 2], 0.0, [1.0; 2]),
+    };
+    let (sin, cos) = rotation.sin_cos();
+    // Translation × rotation × scale, as the extension defines them.
+    let apply = move |[u, v]: [f32; 2]| {
+        let (u, v) = (u * scale[0], v * scale[1]);
+        [
+            cos * u + sin * v + offset[0],
+            -sin * u + cos * v + offset[1],
+        ]
+    };
+    (set, apply)
+}
+
 impl Material {
     /// Reads a glTF material, or `None` when it sets nothing beyond the
     /// defaults (as Blender exports an untouched material): such parts are
     /// shown as Clay rather than as the spec's default white metal.
     fn from_gltf(material: &gltf::Material) -> Option<Self> {
+        if let Some(sg) = material.pbr_specular_glossiness() {
+            // Older files: the diffuse colour stands in for the base colour.
+            return Some(Self {
+                name: material.name().unwrap_or_default().to_owned(),
+                base_color: Vec4::from(sg.diffuse_factor()),
+                base_color_texture: sg.diffuse_texture().map(|t| t.texture().source().index()),
+                metallic: 0.0,
+                roughness: 1.0 - sg.glossiness_factor(),
+                metallic_roughness_texture: None,
+                normal_scale: material.normal_texture().map_or(1.0, |n| n.scale()),
+                normal_texture: material
+                    .normal_texture()
+                    .map(|n| n.texture().source().index()),
+            });
+        }
         let pbr = material.pbr_metallic_roughness();
         let base_color_texture = pbr
             .base_color_texture()
@@ -633,6 +693,103 @@ mod tests {
             .position(|v| v.position == small.vertices[7].position)
             .unwrap();
         assert!((curvature[on_fold] - a).abs() < 1e-4);
+    }
+
+    /// A one-triangle GLB whose material's base colour texture uses
+    /// `texture_info` (JSON), with UVs (0,0), (1,0), (0,1).
+    fn triangle_gltf(texture_info: &str, extensions_required: &str) -> Vec<u8> {
+        // A 1×1 white PNG.
+        let mut png = Vec::new();
+        image::ImageEncoder::write_image(
+            image::codecs::png::PngEncoder::new(&mut png),
+            &[255; 4],
+            1,
+            1,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+        let mut bin = Vec::new();
+        for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            bin.extend(p.iter().flat_map(|c| c.to_le_bytes()));
+        }
+        for uv in [[0.0f32, 0.0], [1.0, 0.0], [0.0, 1.0]] {
+            bin.extend(uv.iter().flat_map(|c| c.to_le_bytes()));
+        }
+        bin.extend(&png);
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let mut json = format!(
+            r#"{{
+  "asset": {{"version": "2.0"}},
+  "extensionsUsed": ["KHR_texture_transform"],
+  "extensionsRequired": [{extensions_required}],
+  "scenes": [{{"nodes": [0]}}], "scene": 0,
+  "nodes": [{{"mesh": 0}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "TEXCOORD_0": 1}}, "material": 0}}]}}],
+  "materials": [{{"pbrMetallicRoughness": {{"baseColorTexture": {texture_info}}}}}],
+  "textures": [{{"source": 0}}],
+  "images": [{{"bufferView": 2, "mimeType": "image/png"}}],
+  "buffers": [{{"byteLength": {len}}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 24}},
+    {{"buffer": 0, "byteOffset": 60, "byteLength": {png}}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0]}},
+    {{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC2"}}
+  ]
+}}"#,
+            len = bin.len(),
+            png = png.len(),
+        )
+        .into_bytes();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let total = 12 + 8 + json.len() + 8 + bin.len();
+        let mut glb = Vec::new();
+        glb.extend(b"glTF");
+        glb.extend(2u32.to_le_bytes());
+        glb.extend((total as u32).to_le_bytes());
+        glb.extend((json.len() as u32).to_le_bytes());
+        glb.extend(b"JSON");
+        glb.extend(json);
+        glb.extend((bin.len() as u32).to_le_bytes());
+        glb.extend(b"BIN\0");
+        glb.extend(bin);
+        glb
+    }
+
+    fn uvs(model: &Model) -> Vec<[f32; 2]> {
+        model.vertices.iter().map(|v| v.uv).collect()
+    }
+
+    #[test]
+    fn a_model_that_requires_texture_transform_loads_with_moved_uvs() {
+        let shifted = r#"{"index": 0, "extensions": {"KHR_texture_transform": {"offset": [0.5, 0.25], "scale": [2.0, 3.0]}}}"#;
+        let model =
+            Model::from_gltf_slice("t", &triangle_gltf(shifted, r#""KHR_texture_transform""#))
+                .expect("KHR_texture_transform is supported");
+        assert_eq!(uvs(&model), [[0.5, 0.25], [2.5, 0.25], [0.5, 3.25]]);
+
+        // A quarter turn: (u, v) -> (v, -u), as the extension defines it.
+        let turned =
+            r#"{"index": 0, "extensions": {"KHR_texture_transform": {"rotation": 1.5707964}}}"#;
+        let model = Model::from_gltf_slice("t", &triangle_gltf(turned, "")).unwrap();
+        for (got, want) in uvs(&model)
+            .iter()
+            .zip([[0.0, 0.0], [0.0, -1.0], [1.0, 0.0]])
+        {
+            assert!(
+                (got[0] - want[0]).abs() < 1e-6 && (got[1] - want[1]).abs() < 1e-6,
+                "{got:?}"
+            );
+        }
+
+        let plain = Model::from_gltf_slice("t", &triangle_gltf(r#"{"index": 0}"#, "")).unwrap();
+        assert_eq!(uvs(&plain), [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
     }
 
     #[test]
