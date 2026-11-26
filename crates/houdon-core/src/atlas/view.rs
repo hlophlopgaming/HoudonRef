@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use glam::Vec3;
 
+use super::masses::{DEEP_MUSCLE_SRGB, Mass, mass_of};
 use super::{Atlas, BodySystem, Structure, Tissue};
 use crate::scene::ray_box_distance;
 use crate::{Bounds, ModelId, Scene};
@@ -86,6 +87,19 @@ impl Tissue {
     }
 }
 
+/// How the Atlas colours its structures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AtlasColors {
+    /// Each muscle in the colour of its sculptural mass; other tissues in
+    /// their natural colours.
+    #[default]
+    Masses,
+    /// Every tissue as it looks.
+    Natural,
+    /// Everything in the clay tone.
+    Clay,
+}
+
 /// One structure to draw.
 #[derive(Debug, Clone, Copy)]
 pub struct ShownStructure<'a> {
@@ -108,6 +122,7 @@ pub struct AtlasView {
     hidden: HashSet<StructureIndex>,
     /// When set, only these are shown, whatever their layers.
     isolated: Option<HashSet<StructureIndex>>,
+    pub colors: AtlasColors,
     /// The camera, lights, room and shading the body is seen with; it
     /// holds no objects of its own.
     pub scene: Scene,
@@ -136,6 +151,7 @@ impl AtlasView {
             selected: None,
             hidden: HashSet::new(),
             isolated: None,
+            colors: AtlasColors::default(),
             scene,
         };
         view.frame(1.0);
@@ -344,6 +360,32 @@ impl AtlasView {
         }
     }
 
+    /// The colour `structure` is drawn in, linear RGB.
+    pub fn color(&self, structure: &Structure) -> Vec3 {
+        match self.colors {
+            AtlasColors::Clay => self.scene.shading.clay_color,
+            AtlasColors::Natural => structure.tissue.natural_color(),
+            AtlasColors::Masses => match (mass_of(structure), structure.tissue) {
+                (Some(mass), _) => mass.color(),
+                (None, Tissue::Muscle) => {
+                    Vec3::from(DEEP_MUSCLE_SRGB.map(|c| (f32::from(c) / 255.0).powf(2.2)))
+                }
+                (None, tissue) => tissue.natural_color(),
+            },
+        }
+    }
+
+    /// The structures of `mass`.
+    pub fn structures_of(&self, mass: &Mass) -> Vec<StructureIndex> {
+        self.atlas
+            .structures()
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| mass_of(s) == Some(mass))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// The bounds of what is shown, or of the whole body when nothing is.
     pub fn shown_bounds(&self) -> Bounds {
         let bounds = self
@@ -522,6 +564,35 @@ mod tests {
         assert!(
             view.shown().all(|s| !s.selected),
             "selection of a hidden part shows nothing"
+        );
+    }
+
+    #[test]
+    fn colours_follow_the_mode() {
+        let mut view = AtlasView::new(human());
+        let deltoid = view
+            .atlas()
+            .structure("Clavicular part of deltoid muscle.l")
+            .unwrap()
+            .clone();
+        let pectoral = view
+            .atlas()
+            .structure("Clavicular head of pectoralis major muscle.l")
+            .unwrap()
+            .clone();
+        let femur = view.atlas().structure("Femur.l").unwrap().clone();
+        assert_ne!(view.color(&deltoid), view.color(&pectoral), "masses differ");
+        assert_eq!(view.color(&femur), Tissue::Bone.natural_color());
+        view.colors = AtlasColors::Natural;
+        assert_eq!(view.color(&deltoid), view.color(&pectoral));
+        view.colors = AtlasColors::Clay;
+        assert_eq!(view.color(&femur), view.color(&deltoid));
+        let mass = mass_of(&deltoid).unwrap();
+        let parts = view.structures_of(mass);
+        assert!(
+            parts.len() >= 6,
+            "three parts on each side: {}",
+            parts.len()
         );
     }
 

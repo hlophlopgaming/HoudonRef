@@ -9,9 +9,11 @@ use serde::Deserialize;
 
 use crate::Model;
 
+mod masses;
 mod view;
 
-pub use view::{AtlasView, Layer, LayerState, ShownStructure, StructureIndex};
+pub use masses::{DEEP_MUSCLE_SRGB, MASSES, Mass, NEIGHBOURS, mass_of};
+pub use view::{AtlasColors, AtlasView, Layer, LayerState, ShownStructure, StructureIndex};
 
 /// The body system a structure belongs to: one of the Atlas's layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]

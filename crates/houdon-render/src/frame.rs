@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use houdon_core::{AtlasView, ColorSource, Light, Model, ModelId, Room, Scene, Shading, Surface};
+use houdon_core::{AtlasView, Light, Model, ModelId, Room, Scene, Shading, Surface};
 
 use crate::RenderQuality;
 
@@ -152,17 +152,12 @@ impl Frame {
     }
 
     /// Takes a picture of what the Atlas shows, in place, with the view's
-    /// camera, lights and shading. Clay paints every structure in the clay
-    /// tone; otherwise each has the colour of its tissue.
+    /// camera, lights and shading, each structure in the view's colour.
     pub fn from_atlas(view: &AtlasView, aspect: f32) -> Self {
         let mut frame = Self::from_scene(&view.scene, aspect);
         frame.light_centre = view.shown_bounds().center();
-        let shading = &view.scene.shading;
         frame.objects.extend(view.shown().map(|shown| {
-            let color = match shading.color {
-                ColorSource::Clay => shading.clay_color,
-                _ => shown.structure.tissue.natural_color(),
-            };
+            let color = view.color(shown.structure);
             FrameObject {
                 model_id: shown.model_id,
                 model: Arc::clone(&shown.structure.model),

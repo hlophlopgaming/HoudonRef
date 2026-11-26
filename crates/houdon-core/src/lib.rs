@@ -17,8 +17,8 @@ pub mod shading;
 pub mod units;
 
 pub use atlas::{
-    Atlas, AtlasError, AtlasPack, AtlasView, BodySystem, Layer, LayerState, ShownStructure, Side,
-    Structure, Tissue,
+    Atlas, AtlasColors, AtlasError, AtlasPack, AtlasView, BodySystem, Layer, LayerState,
+    ShownStructure, Side, Structure, Tissue,
 };
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};

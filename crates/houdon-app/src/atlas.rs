@@ -3,7 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use houdon_core::atlas::ATLAS_MANIFEST;
-use houdon_core::{Atlas, AtlasPack, AtlasView, ColorSource, Layer, LayerState, ShadingMode, Side};
+use houdon_core::atlas::{DEEP_MUSCLE_SRGB, MASSES, Mass, mass_of};
+use houdon_core::{Atlas, AtlasColors, AtlasPack, AtlasView, Layer, LayerState, ShadingMode, Side};
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
@@ -128,8 +129,9 @@ impl AtlasTab {
         };
         egui::Panel::left("atlas_panel")
             .resizable(true)
-            .default_size(240.0)
+            .default_size(260.0)
             .min_size(200.0)
+            .max_size(340.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if let Some(framing) = panel(ui, tr, view, &mut self.search) {
@@ -220,7 +222,13 @@ fn panel(
         if let Some(latin) = &structure.latin {
             ui.label(egui::RichText::new(latin).italics());
         }
-        ui.weak(tr.tr(layer_message_id(Layer::of(structure))));
+        match mass_of(structure) {
+            Some(mass) => ui.weak(tr.tr_args(
+                "atlas-mass-of",
+                &[("mass", tr.tr(&mass_message_id(mass)).into())],
+            )),
+            None => ui.weak(tr.tr(layer_message_id(Layer::of(structure)))),
+        };
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr.tr("atlas-isolate")).clicked() {
                 view.isolate([index]);
@@ -277,16 +285,16 @@ fn panel(
             tr.tr("shading-solid"),
         );
     });
-    let mut natural = shading.color != ColorSource::Clay;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut natural, true, tr.tr("atlas-color-natural"));
-        ui.selectable_value(&mut natural, false, tr.tr("color-clay"));
+    ui.horizontal_wrapped(|ui| {
+        for (colors, id) in [
+            (AtlasColors::Masses, "atlas-color-masses"),
+            (AtlasColors::Natural, "atlas-color-natural"),
+            (AtlasColors::Clay, "color-clay"),
+        ] {
+            ui.selectable_value(&mut view.colors, colors, tr.tr(id));
+        }
     });
-    shading.color = if natural {
-        ColorSource::Material
-    } else {
-        ColorSource::Clay
-    };
+    let shading = &mut view.scene.shading;
     ui.checkbox(
         &mut shading.ambient_occlusion.enabled,
         tr.tr("studio-ambient-occlusion"),
@@ -294,11 +302,44 @@ fn panel(
     if ui.button(tr.tr("atlas-frame")).clicked() {
         framing = Some(Framing::Shown);
     }
+    if view.colors == AtlasColors::Masses {
+        ui.separator();
+        legend(ui, tr, view, &mut framing);
+    }
     ui.separator();
     structure_list(ui, tr, view, &mut framing);
     ui.separator();
     ui.weak(tr.tr("atlas-credit"));
     framing
+}
+
+/// The masses with their colours; a click shows only that mass.
+fn legend(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView, framing: &mut Option<Framing>) {
+    ui.heading(tr.tr("atlas-masses"));
+    ui.weak(tr.tr("atlas-masses-hint"));
+    for mass in MASSES {
+        ui.horizontal(|ui| {
+            let [r, g, b] = mass.srgb;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
+            if ui.link(tr.tr(&mass_message_id(mass))).clicked() {
+                view.isolate(view.structures_of(mass));
+                *framing = Some(Framing::Shown);
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        let [r, g, b] = DEEP_MUSCLE_SRGB;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
+        ui.label(tr.tr("mass-deep"));
+    });
+}
+
+fn mass_message_id(mass: &Mass) -> String {
+    format!("mass-{}", mass.key)
 }
 
 /// Every structure by layer, alphabetically, each with a box to hide it.
@@ -428,6 +469,17 @@ mod tests {
         let manifest = carried_file(ATLAS_MANIFEST).unwrap();
         let atlas = build(carried_file, &manifest).unwrap();
         assert_eq!(atlas.structures().len(), 1295);
+    }
+
+    #[test]
+    fn every_mass_has_a_name() {
+        for language in houdon_i18n::Language::ALL {
+            let tr = Localizer::new(language);
+            for mass in MASSES {
+                let id = mass_message_id(mass);
+                assert_ne!(tr.tr(&id), id, "{language:?} names {id}");
+            }
+        }
     }
 
     #[test]
