@@ -29,7 +29,7 @@ Later: `houdon-import` for formats beyond glTF, and a content-pack crate for the
 
 ## Stage 1: Studio MVP
 
-Stage 1a is specified in issue #1 and split into tickets #2 to #19 and #23 to #25.
+Stage 1a is specified in issue #1 and split into tickets #2 to #19 and #23 to #25. It is complete.
 
 Done:
 
@@ -51,12 +51,10 @@ Done:
 - [x] Light presets with built-ins, local storage, and RON import and export (#18).
 - [x] Camera presets (front, three-quarter, profile, from above, from below; framing the whole scene or the selection) and the artist's own camera and room presets (#18).
 - [x] A friendlier Studio: toolbar with Scene and Add menus, collapsible panel sections, file dialogs.
-
-Next:
-
 - [x] OBJ import with MTL materials and textures (#14).
-- Not planned: desktop `.blend` import through an installed Blender (#8); a `.blend` shows how to export glTF from Blender instead.
-- [x] Automatic quality (#19).
+- [x] Automatic quality by hardware and frame times, with a manual override (#19).
+
+Not planned: desktop `.blend` import through an installed Blender (#8); a `.blend` shows how to export glTF from Blender instead.
 
 Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.
 
