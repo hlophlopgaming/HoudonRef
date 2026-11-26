@@ -98,6 +98,44 @@ pub enum AtlasColors {
     Natural,
     /// Everything in the clay tone.
     Clay,
+    /// The skull's bones each in a colour of its own, so the sutures read;
+    /// everything else as it looks.
+    Bones,
+}
+
+/// The skull's bones, teeth and nose cartilages, by the start of their
+/// names, each with the colour (8-bit sRGB) the Bones mode gives it.
+/// Neighbouring bones differ.
+pub const SKULL: &[(&str, [u8; 3])] = &[
+    ("Frontal bone", [230, 196, 120]),
+    ("Parietal bone", [120, 170, 220]),
+    ("Temporal bone", [140, 200, 140]),
+    ("Occipital bone", [220, 140, 140]),
+    ("Sphenoid bone", [190, 150, 220]),
+    ("Ethmoid bone", [240, 220, 160]),
+    ("Zygomatic bone", [230, 150, 90]),
+    ("Maxilla", [110, 190, 190]),
+    ("Mandible", [200, 120, 180]),
+    ("Nasal bone", [240, 230, 110]),
+    ("Lacrimal bone", [160, 120, 90]),
+    ("Palatine bone", [150, 160, 230]),
+    ("Vomer", [200, 200, 200]),
+    ("Inferior nasal concha", [170, 210, 120]),
+    ("Upper ", [245, 242, 230]),
+    ("Lower ", [245, 242, 230]),
+    ("Nasal septal cartilage", [160, 200, 210]),
+    ("Lateral process of nasal septal cartilage", [160, 200, 210]),
+    ("Major alar cartilage", [160, 200, 210]),
+];
+
+fn skull_color(structure: &Structure) -> Option<[u8; 3]> {
+    if structure.system != BodySystem::Skeletal {
+        return None;
+    }
+    SKULL
+        .iter()
+        .find(|(name, _)| structure.name.starts_with(name))
+        .map(|&(_, color)| color)
 }
 
 /// One structure to draw.
@@ -365,6 +403,10 @@ impl AtlasView {
         match self.colors {
             AtlasColors::Clay => self.scene.shading.clay_color,
             AtlasColors::Natural => structure.tissue.natural_color(),
+            AtlasColors::Bones => match skull_color(structure) {
+                Some(srgb) => Vec3::from(srgb.map(|c| (f32::from(c) / 255.0).powf(2.2))),
+                None => structure.tissue.natural_color(),
+            },
             AtlasColors::Masses => match (mass_of(structure), structure.tissue) {
                 (Some(mass), _) => mass.color(),
                 (None, Tissue::Muscle) => {
@@ -373,6 +415,29 @@ impl AtlasView {
                 (None, tissue) => tissue.natural_color(),
             },
         }
+    }
+
+    /// The skull's bones, teeth and nose cartilages.
+    pub fn skull(&self) -> Vec<StructureIndex> {
+        self.atlas
+            .structures()
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| skull_color(s).is_some())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Shows the skull alone, framed from `preset`'s viewpoint.
+    pub fn show_skull(&mut self, preset: &crate::CameraPreset, aspect: f32) {
+        self.isolate(self.skull());
+        self.view_from(preset, aspect);
+    }
+
+    /// Moves the camera to `preset`'s viewpoint around what is shown.
+    pub fn view_from(&mut self, preset: &crate::CameraPreset, aspect: f32) {
+        let bounds = self.shown_bounds();
+        preset.aim(&mut self.scene.camera, &bounds, aspect);
     }
 
     /// The structures of `mass`.
@@ -594,6 +659,72 @@ mod tests {
             "three parts on each side: {}",
             parts.len()
         );
+    }
+
+    #[test]
+    fn the_skull_is_its_bones_and_shows_alone_in_every_classic_view() {
+        let mut view = AtlasView::new(human());
+        let names: Vec<String> = view
+            .skull()
+            .iter()
+            .map(|&i| view.atlas().structures()[i].id.clone())
+            .collect();
+        for bone in [
+            "Frontal bone",
+            "Parietal bone.l",
+            "Temporal bone.r",
+            "Occipital bone",
+            "Sphenoid bone",
+            "Zygomatic bone.l",
+            "Maxilla.r",
+            "Mandible",
+            "Nasal bone.l",
+            "Vomer",
+        ] {
+            assert!(names.iter().any(|n| n == bone), "{bone} in {names:?}");
+        }
+        assert!(names.iter().any(|n| n.contains("molar")), "teeth too");
+        assert!(!names.iter().any(|n| n.starts_with("Femur")));
+        let aspect = 1.5;
+        for preset in crate::CameraPreset::built_ins() {
+            view.show_skull(&preset, aspect);
+            assert_eq!(view.shown().count(), names.len(), "only the skull");
+            let bounds = view.shown_bounds();
+            let view_proj = view.scene.camera.view_projection(aspect);
+            let mut lo = glam::Vec2::splat(f32::MAX);
+            let mut hi = glam::Vec2::splat(f32::MIN);
+            for corner in 0..8 {
+                let pick = |bit, a: f32, b: f32| if corner & bit == 0 { a } else { b };
+                let point = Vec3::new(
+                    pick(1, bounds.min.x, bounds.max.x),
+                    pick(2, bounds.min.y, bounds.max.y),
+                    pick(4, bounds.min.z, bounds.max.z),
+                );
+                let ndc = view_proj.project_point3(point).truncate();
+                lo = lo.min(ndc);
+                hi = hi.max(ndc);
+            }
+            let name = preset.name().to_owned();
+            assert!(
+                lo.cmpge(glam::Vec2::splat(-1.3)).all() && hi.cmple(glam::Vec2::splat(1.3)).all(),
+                "{name}: in view {lo} {hi}"
+            );
+            assert!(
+                (hi - lo).max_element() > 0.8,
+                "{name}: fills the view {lo} {hi}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bones_mode_tells_neighbouring_skull_bones_apart() {
+        let mut view = AtlasView::new(human());
+        view.colors = AtlasColors::Bones;
+        let color = |id: &str| view.color(view.atlas().structure(id).unwrap());
+        assert_ne!(color("Frontal bone"), color("Parietal bone.l"));
+        assert_ne!(color("Parietal bone.l"), color("Temporal bone.l"));
+        assert_eq!(color("Parietal bone.l"), color("Parietal bone.r"));
+        assert_eq!(color("Femur.l"), Tissue::Bone.natural_color());
     }
 
     #[test]

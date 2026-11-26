@@ -119,14 +119,19 @@ impl CameraPreset {
     /// of `aspect`. Nothing else in the scene changes.
     pub fn apply(&self, scene: &mut Scene, target: CameraTarget, aspect: f32) {
         let bounds = scene.framing_bounds(target);
+        self.aim(&mut scene.camera, &bounds, aspect);
+    }
+
+    /// Moves `camera` to this viewpoint around `bounds`, for a view of
+    /// `aspect`.
+    pub fn aim(&self, camera: &mut OrbitCamera, bounds: &crate::Bounds, aspect: f32) {
         if bounds.is_empty() {
             return;
         }
-        let camera = &mut scene.camera;
         camera.yaw = self.yaw;
         camera.pitch = self.pitch;
         camera.focal_length_mm = self.focal_length_mm;
-        camera.frame(&bounds, aspect);
+        camera.frame(bounds, aspect);
         camera.distance = (camera.distance * self.distance)
             .clamp(OrbitCamera::MIN_DISTANCE, OrbitCamera::MAX_DISTANCE);
     }

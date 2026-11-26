@@ -143,3 +143,21 @@ fn neighbouring_masses_render_in_different_colours() {
     assert!(natural < 0.05, "one muscle colour: {natural}");
     assert!(masses > 0.2, "two masses: {masses}");
 }
+
+#[test]
+fn the_bones_mode_colours_neighbouring_skull_bones_differently() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut view = AtlasView::new(human());
+    view.colors = AtlasColors::Bones;
+    let frontal = mean_colour(&mut renderer, &mut view, &["Frontal bone"]);
+    let parietal = mean_colour(&mut renderer, &mut view, &["Parietal bone.l"]);
+    let norm = |c: [f32; 3]| c.map(|v| v / (c[0] + c[1] + c[2]).max(1.0));
+    let (a, b) = (norm(frontal), norm(parietal));
+    let difference: f32 = (0..3).map(|i| (a[i] - b[i]).abs()).sum();
+    assert!(
+        difference > 0.15,
+        "frontal {frontal:?}, parietal {parietal:?}"
+    );
+}

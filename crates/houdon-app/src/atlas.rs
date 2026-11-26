@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::atlas::ATLAS_MANIFEST;
 use houdon_core::atlas::{DEEP_MUSCLE_SRGB, MASSES, Mass, mass_of};
-use houdon_core::{Atlas, AtlasColors, AtlasPack, AtlasView, Layer, LayerState, ShadingMode, Side};
+use houdon_core::{
+    Atlas, AtlasColors, AtlasPack, AtlasView, CameraPreset, Layer, LayerState, ShadingMode, Side,
+};
 use houdon_i18n::{Language, Localizer};
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
@@ -64,6 +66,8 @@ pub struct AtlasTab {
 enum Framing {
     Shown,
     Selected,
+    /// What is shown, from the built-in camera preset at this index.
+    View(usize),
 }
 
 impl Default for AtlasTab {
@@ -156,6 +160,11 @@ impl AtlasTab {
             match self.frame_pending.take() {
                 Some(Framing::Shown) => view.frame(aspect),
                 Some(Framing::Selected) => view.frame_selected(aspect),
+                Some(Framing::View(index)) => {
+                    if let Some(preset) = CameraPreset::built_ins().get(index) {
+                        view.view_from(preset, aspect);
+                    }
+                }
                 None => {}
             }
             drive_camera(&mut view.scene.camera, ui, &response, rect);
@@ -258,6 +267,23 @@ fn panel(
         framing = Some(Framing::Shown);
     }
 
+    ui.heading(tr.tr("atlas-skull"));
+    if ui.button(tr.tr("atlas-show-skull")).clicked() {
+        view.isolate(view.skull());
+        view.colors = AtlasColors::Bones;
+        framing = Some(Framing::View(0));
+    }
+    ui.label(tr.tr("atlas-views"));
+    ui.horizontal_wrapped(|ui| {
+        for (index, preset) in CameraPreset::built_ins().iter().enumerate() {
+            let label = tr.tr(&format!("camera-preset-{}", preset.name()));
+            if ui.button(label).clicked() {
+                framing = Some(Framing::View(index));
+            }
+        }
+    });
+    ui.separator();
+
     ui.heading(tr.tr("atlas-layers"));
     for layer in Layer::ALL {
         let mut state = view.layer(layer);
@@ -294,6 +320,7 @@ fn panel(
     ui.horizontal_wrapped(|ui| {
         for (colors, id) in [
             (AtlasColors::Masses, "atlas-color-masses"),
+            (AtlasColors::Bones, "atlas-color-bones"),
             (AtlasColors::Natural, "atlas-color-natural"),
             (AtlasColors::Clay, "color-clay"),
         ] {

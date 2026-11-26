@@ -13,7 +13,7 @@ mod masses;
 mod view;
 
 pub use masses::{DEEP_MUSCLE_SRGB, MASSES, Mass, NEIGHBOURS, mass_of};
-pub use view::{AtlasColors, AtlasView, Layer, LayerState, ShownStructure, StructureIndex};
+pub use view::{AtlasColors, AtlasView, Layer, LayerState, SKULL, ShownStructure, StructureIndex};
 
 /// The body system a structure belongs to: one of the Atlas's layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
