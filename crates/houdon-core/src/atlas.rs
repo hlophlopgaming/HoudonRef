@@ -65,9 +65,22 @@ pub struct Structure {
     pub latin: Option<String>,
     /// The id of the structure this one is part of, if any.
     pub parent: Option<String>,
+    /// The Russian name, where the pack has one.
+    pub russian: Option<TranslatedName>,
     /// In place in the body: metres, Y up, the body facing +Z.
     pub model: Arc<Model>,
 }
+
+/// A structure's name in another language, without its side.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TranslatedName {
+    pub name: String,
+    /// Still waiting for a person who knows the terminology to check it.
+    pub review: bool,
+}
+
+/// The pack's Russian names, by the English name without the side.
+pub const RUSSIAN_NAMES: &str = "names.ru.ron";
 
 /// Errors reading a content pack.
 #[derive(Debug, thiserror::Error)]
@@ -82,6 +95,8 @@ pub enum AtlasError {
     ShortFile(String),
     #[error("atlas structure {0} refers to an unknown mesh")]
     UnknownMesh(String),
+    #[error("invalid atlas names: {0}")]
+    Names(ron::error::SpannedError),
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,11 +159,20 @@ impl AtlasPack {
     }
 
     /// Reads the meshes from the data files `file` gives by name and puts
-    /// every structure in place.
+    /// every structure in place. The Russian names ([`RUSSIAN_NAMES`]) are
+    /// taken too when `file` has them.
     pub fn build(
         &self,
         mut file: impl FnMut(&str) -> Option<Vec<u8>>,
     ) -> Result<Atlas, AtlasError> {
+        let russian: std::collections::HashMap<String, TranslatedName> = match file(RUSSIAN_NAMES) {
+            Some(bytes) => {
+                let list: Vec<(String, TranslatedName)> =
+                    ron::de::from_bytes(&bytes).map_err(AtlasError::Names)?;
+                list.into_iter().collect()
+            }
+            None => Default::default(),
+        };
         let mut data = std::collections::HashMap::new();
         for name in self.files() {
             let bytes = file(name).ok_or_else(|| AtlasError::MissingFile(name.to_owned()))?;
@@ -178,6 +202,7 @@ impl AtlasPack {
                     tissue: entry.tissue,
                     latin: entry.latin.clone(),
                     parent: entry.parent.clone(),
+                    russian: russian.get(&split_side(&entry.id).0).cloned(),
                 })
             })
             .collect::<Result<Vec<_>, AtlasError>>()?;
@@ -377,6 +402,30 @@ pub(crate) mod tests {
                 .as_ref()
                 .unwrap()
                 .contains("pectoralis")
+        );
+    }
+
+    #[test]
+    fn every_bone_and_muscle_has_a_russian_name_marked_for_review() {
+        let atlas = human();
+        for structure in atlas.structures() {
+            if structure.system == BodySystem::Joints {
+                continue;
+            }
+            let russian = structure
+                .russian
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has no Russian name", structure.id));
+            assert!(!russian.name.is_empty());
+            assert!(russian.review, "{} is marked for review", structure.id);
+        }
+        let ru = |id: &str| atlas.structure(id).unwrap().russian.clone().unwrap().name;
+        assert_eq!(ru("Femur.l"), "Бедренная кость");
+        assert_eq!(ru("Fifth rib.l"), "Пятое ребро");
+        assert_eq!(ru("Vertebra T7"), "Грудной позвонок T7");
+        assert_eq!(
+            ru("Distal phalanx of fifth finger of hand.r"),
+            "Дистальная фаланга пятого пальца кисти"
         );
     }
 

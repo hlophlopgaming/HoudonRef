@@ -27,6 +27,15 @@ Not included: the non-commercial parts of Z-Anatomy (the inner ear,
 CC BY-NC-SA 4.0, and the kidney, CC BY-NC 4.0), nor organs, vessels or
 nerves.
 
+Russian names
+-------------
+
+names.ru.ron holds Russian names for every bone and muscle, written for
+this project by matching the English and Latin terms to Russian anatomical
+terminology. Each waits for review by a person who knows the terminology
+(review: true until checked). They are shared under the same licence as
+the rest of this folder.
+
 Changes
 -------
 

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use houdon_core::atlas::ATLAS_MANIFEST;
 use houdon_core::atlas::{DEEP_MUSCLE_SRGB, MASSES, Mass, mass_of};
 use houdon_core::{Atlas, AtlasColors, AtlasPack, AtlasView, Layer, LayerState, ShadingMode, Side};
-use houdon_i18n::Localizer;
+use houdon_i18n::{Language, Localizer};
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
 use crate::studio::{drive_camera, physical_size};
@@ -29,7 +29,13 @@ fn carried_file(name: &str) -> Option<Vec<u8>> {
             }
         };
     }
-    pack!("atlas.ron", "skeletal.bin", "muscular.bin", "joints.bin")
+    pack!(
+        "atlas.ron",
+        "skeletal.bin",
+        "muscular.bin",
+        "joints.bin",
+        "names.ru.ron"
+    )
 }
 
 type Arrival = Arc<Mutex<Option<Result<Atlas, String>>>>;
@@ -195,7 +201,7 @@ fn panel(
             .desired_width(f32::INFINITY),
     );
     if !search.trim().is_empty() {
-        let found = view.search(search, |_| None);
+        let found = view.search(search, |s| translated(s, tr));
         if found.is_empty() {
             ui.weak(tr.tr("atlas-search-none"));
         }
@@ -338,6 +344,15 @@ fn legend(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView, framing: &mut
     });
 }
 
+/// The structure's name in the interface's language, when it has one other
+/// than English.
+fn translated(structure: &houdon_core::Structure, tr: &Localizer) -> Option<String> {
+    match tr.language() {
+        Language::Russian => structure.russian.as_ref().map(|r| r.name.clone()),
+        _ => None,
+    }
+}
+
 fn mass_message_id(mass: &Mass) -> String {
     format!("mass-{}", mass.key)
 }
@@ -382,9 +397,10 @@ fn structure_list(
     }
 }
 
-/// A structure's name in the interface's language, with its side.
+/// A structure's name in the interface's language, with its side. Russian
+/// names show only in the Russian interface.
 fn display_name(structure: &houdon_core::Structure, tr: &Localizer) -> String {
-    let name = structure.name.clone();
+    let name = translated(structure, tr).unwrap_or_else(|| structure.name.clone());
     match structure.side {
         Side::Left => tr.tr_args("atlas-left", &[("name", name.into())]),
         Side::Right => tr.tr_args("atlas-right", &[("name", name.into())]),
@@ -450,6 +466,11 @@ fn start_loading(ctx: &egui::Context) -> Arrival {
             for name in pack.files() {
                 files.insert(name.to_owned(), fetch(name).await?);
             }
+            // The Russian names are welcome but not needed.
+            use houdon_core::atlas::RUSSIAN_NAMES;
+            if let Ok(names) = fetch(RUSSIAN_NAMES).await {
+                files.insert(RUSSIAN_NAMES.to_owned(), names);
+            }
             pack.build(|name| files.remove(name))
                 .map_err(|e| e.to_string())
         }
@@ -479,6 +500,28 @@ mod tests {
                 let id = mass_message_id(mass);
                 assert_ne!(tr.tr(&id), id, "{language:?} names {id}");
             }
+        }
+    }
+
+    #[test]
+    fn russian_names_show_only_in_the_russian_interface() {
+        let manifest = carried_file(ATLAS_MANIFEST).unwrap();
+        let atlas = build(carried_file, &manifest).unwrap();
+        let femur = atlas.structure("Femur.l").unwrap();
+        let english = Localizer::new(Language::English);
+        let russian = Localizer::new(Language::Russian);
+        assert_eq!(display_name(femur, &english), "Femur (left)");
+        assert_eq!(display_name(femur, &russian), "Бедренная кость (слева)");
+        let cyrillic = |text: &str| {
+            text.chars()
+                .any(|c| ('а'..='я').contains(&c.to_lowercase().next().unwrap()))
+        };
+        for structure in atlas.structures() {
+            assert!(
+                !cyrillic(&display_name(structure, &english)),
+                "{}",
+                structure.id
+            );
         }
     }
 

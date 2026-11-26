@@ -18,7 +18,7 @@ pub mod units;
 
 pub use atlas::{
     Atlas, AtlasColors, AtlasError, AtlasPack, AtlasView, BodySystem, Layer, LayerState,
-    ShownStructure, Side, Structure, Tissue,
+    ShownStructure, Side, Structure, Tissue, TranslatedName,
 };
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
