@@ -36,7 +36,7 @@ jobs:
       - run: cargo test --workspace
       - name: Test the Atlas pack builder
         run: |
-          pip install DracoPy
+          pip install DracoPy numpy
           python3 -m unittest discover -s tools/atlas
         env:
           # Render tests must not skip silently in CI.
