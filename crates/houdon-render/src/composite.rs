@@ -4,7 +4,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
-use houdon_core::{Lines, ValueMode};
+use houdon_core::{AmbientOcclusion, Lines, ShadingMode, ValueMode};
 
 use crate::Frame;
 
@@ -62,6 +62,8 @@ struct ValueUniforms {
     cavity: [f32; 4],
     lines: [f32; 4],
     line_color: [f32; 4],
+    ambient_occlusion: [f32; 4],
+    lens: [f32; 4],
 }
 
 /// The scene's picture and depth at the current size.
@@ -73,33 +75,32 @@ pub struct SceneTarget {
     color_view: wgpu::TextureView,
     /// The multisampled picture drawn into and resolved into `color_view`.
     msaa_view: Option<wgpu::TextureView>,
-    /// The normals, and their multisampled version.
-    normal_view: wgpu::TextureView,
-    msaa_normal_view: Option<wgpu::TextureView>,
+    /// The colour picture's depth, multisampled like it.
     pub depth_view: wgpu::TextureView,
+    /// The surfaces for the screen-space overlays (normal and distance,
+    /// see `fs_surface`) and their own depth; never multisampled.
+    pub surface_view: wgpu::TextureView,
+    pub surface_depth_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
 }
 
 impl SceneTarget {
-    /// The colour and normal views to draw the scene into, each with the
-    /// view it resolves to when multisampled.
-    pub fn attachments(&self) -> [(&wgpu::TextureView, Option<&wgpu::TextureView>); 2] {
-        [
-            pair(&self.color_view, self.msaa_view.as_ref()),
-            pair(&self.normal_view, self.msaa_normal_view.as_ref()),
-        ]
+    /// The view to draw the scene's colour into, and the one it resolves
+    /// to when multisampled.
+    pub fn color_attachment(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.msaa_view {
+            Some(msaa) => (msaa, Some(&self.color_view)),
+            None => (&self.color_view, None),
+        }
     }
 }
 
-/// The view to draw into and the one it resolves to, if multisampled.
-fn pair<'a>(
-    single: &'a wgpu::TextureView,
-    msaa: Option<&'a wgpu::TextureView>,
-) -> (&'a wgpu::TextureView, Option<&'a wgpu::TextureView>) {
-    match msaa {
-        Some(msaa) => (msaa, Some(single)),
-        None => (single, None),
-    }
+/// Whether the picture of surfaces is needed: for ambient occlusion in the
+/// Lit mode, the screen-space cavity or the contour lines.
+pub fn needs_surfaces(shading: &houdon_core::Shading) -> bool {
+    (shading.ambient_occlusion.enabled && shading.mode == ShadingMode::Lit)
+        || shading.cavity.screen
+        || shading.lines.contours
 }
 
 pub struct Composite {
@@ -239,8 +240,14 @@ impl Composite {
         let shading = &frame.shading;
         let (value, cavity, lines) = (&shading.value, &shading.cavity, &shading.lines);
         let max = device.limits().max_texture_dimension_2d;
-        let scale = anti_aliasing.supersample;
-        let size = output_size.map(|side| (side.max(1) * scale).min(max));
+        // Without supersampling when that would pass the device's largest
+        // texture: clamping each side apart would change the proportions.
+        let output_size = output_size.map(|side| side.clamp(1, max));
+        let fits = output_size
+            .iter()
+            .all(|&side| side * anti_aliasing.supersample <= max);
+        let scale = if fits { anti_aliasing.supersample } else { 1 };
+        let size = output_size.map(|side| side * scale);
         let samples = anti_aliasing.samples;
         if self
             .target
@@ -284,6 +291,19 @@ impl Composite {
                 [0.0; 4]
             },
             line_color: lines.color.extend(1.0).to_array(),
+            ambient_occlusion: {
+                let ao = &shading.ambient_occlusion;
+                let on = ao.enabled && shading.mode == ShadingMode::Lit;
+                [
+                    if on { ao.strength.clamp(0.0, 1.0) } else { 0.0 },
+                    ao.radius.clamp(0.01, AmbientOcclusion::MAX_RADIUS),
+                    ao.samples
+                        .clamp(AmbientOcclusion::MIN_SAMPLES, AmbientOcclusion::MAX_SAMPLES)
+                        as f32,
+                    0.0,
+                ]
+            },
+            lens: [frame.tan_half_fov, frame.aspect.max(1e-3), 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -331,20 +351,18 @@ impl Composite {
                 samples,
             )
         });
-        let normal_view = texture(
-            "houdon_scene_normals",
+        let surface_view = texture(
+            "houdon_scene_surfaces",
             NORMAL_FORMAT,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             1,
         );
-        let msaa_normal_view = (samples > 1).then(|| {
-            texture(
-                "houdon_scene_normals_msaa",
-                NORMAL_FORMAT,
-                wgpu::TextureUsages::RENDER_ATTACHMENT,
-                samples,
-            )
-        });
+        let surface_depth_view = texture(
+            "houdon_scene_surfaces_depth",
+            SCENE_DEPTH_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            1,
+        );
         let depth_view = texture(
             "houdon_scene_depth",
             SCENE_DEPTH_FORMAT,
@@ -369,7 +387,7 @@ impl Composite {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&normal_view),
+                    resource: wgpu::BindingResource::TextureView(&surface_view),
                 },
             ],
         });
@@ -378,9 +396,9 @@ impl Composite {
             samples,
             color_view,
             msaa_view,
-            normal_view,
-            msaa_normal_view,
             depth_view,
+            surface_view,
+            surface_depth_view,
             bind_group,
         }
     }

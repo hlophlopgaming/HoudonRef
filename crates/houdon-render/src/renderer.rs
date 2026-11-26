@@ -9,7 +9,9 @@ use houdon_core::{
     Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, ShadingMode, SolidLighting, Vertex,
 };
 
-use crate::composite::{AntiAliasing, Composite, NORMAL_FORMAT, SCENE_DEPTH_FORMAT};
+use crate::composite::{
+    AntiAliasing, Composite, NORMAL_FORMAT, SCENE_DEPTH_FORMAT, needs_surfaces,
+};
 use crate::light_mask::MaskTextures;
 use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
@@ -169,6 +171,7 @@ pub struct SceneRenderer {
     target_format: wgpu::TextureFormat,
     /// Rebuilt when the multisampling changes.
     pipelines: ScenePipelines,
+    surface_pipelines: SurfacePipelines,
     globals_buffer: wgpu::Buffer,
     globals_layout: wgpu::BindGroupLayout,
     globals_bind_group: wgpu::BindGroup,
@@ -250,6 +253,7 @@ impl SceneRenderer {
         });
 
         let pipelines = ScenePipelines::new(device, &pipeline_layout, &shader, target_format, 1);
+        let surface_pipelines = SurfacePipelines::new(device, &pipeline_layout, &shader);
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_globals"),
@@ -271,6 +275,7 @@ impl SceneRenderer {
             pipeline_layout,
             target_format,
             pipelines,
+            surface_pipelines,
             globals_buffer,
             globals_layout,
             globals_bind_group,
@@ -523,36 +528,30 @@ impl SceneRenderer {
         // the colour is resolved after the wireframe pass instead, which
         // draws over it and needs the scene's depth.
         let wireframe = self.wireframe;
-        let attachment = |(view, resolve_target): (_, Option<_>), clear, resolve| {
-            let resolve_target = if resolve { resolve_target } else { None };
-            Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
-                    store: if resolve_target.is_some() {
-                        wgpu::StoreOp::Discard
-                    } else {
-                        wgpu::StoreOp::Store
-                    },
-                },
-            })
-        };
         let keep = if wireframe {
             wgpu::StoreOp::Store
         } else {
             wgpu::StoreOp::Discard
         };
-        let [color, normals] = target.attachments();
+        let color = target.color_attachment();
         {
+            let (view, resolve_target) = color;
+            let resolve_target = if wireframe { None } else { resolve_target };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("houdon_scene_pass"),
-                color_attachments: &[
-                    attachment(color, wgpu::Color { r, g, b, a: 1.0 }, !wireframe),
-                    // No surface: the farthest distance.
-                    attachment(normals, wgpu::Color::WHITE, true),
-                ],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                        store: if resolve_target.is_some() {
+                            wgpu::StoreOp::Discard
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
+                    },
+                })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -563,7 +562,32 @@ impl SceneRenderer {
                 }),
                 ..Default::default()
             });
-            self.draw_scene(&mut pass);
+            self.draw_scene(&mut pass, false);
+        }
+        if needs_surfaces(&frame.shading) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_surface_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // No surface: the farthest distance.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.surface_depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            self.draw_scene(&mut pass, true);
         }
         if wireframe {
             // Its own pass: WebGL2 cannot blend one target and not another.
@@ -629,17 +653,20 @@ impl SceneRenderer {
         self.composite.draw(render_pass);
     }
 
-    fn draw_scene(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+    /// Draws every part: its colour, or with `surfaces` the picture of
+    /// surfaces for the screen-space overlays.
+    fn draw_scene(&self, render_pass: &mut wgpu::RenderPass<'_>, surfaces: bool) {
         render_pass.set_bind_group(0, &self.globals_bind_group, &[]);
         render_pass.set_bind_group(2, &self.shadows.bind_group, &[]);
         for (i, entry) in self.draw_list.iter().enumerate() {
             let Some(mesh) = self.meshes.get(&entry.model_id) else {
                 continue;
             };
-            render_pass.set_pipeline(if entry.one_sided {
-                &self.pipelines.one_sided
-            } else {
-                &self.pipelines.two_sided
+            render_pass.set_pipeline(match (surfaces, entry.one_sided) {
+                (false, false) => &self.pipelines.two_sided,
+                (false, true) => &self.pipelines.one_sided,
+                (true, false) => &self.surface_pipelines.two_sided,
+                (true, true) => &self.surface_pipelines.one_sided,
             });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
@@ -691,6 +718,32 @@ struct ScenePipelines {
     wireframe: wgpu::RenderPipeline,
 }
 
+/// The surfaces pass's pipelines: never multisampled (see `fs_surface`).
+struct SurfacePipelines {
+    two_sided: wgpu::RenderPipeline,
+    one_sided: wgpu::RenderPipeline,
+}
+
+impl SurfacePipelines {
+    fn new(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+    ) -> Self {
+        let output = SceneOutput {
+            entry_point: "fs_surface",
+            format: NORMAL_FORMAT,
+        };
+        let pipeline = |cull_mode, label| {
+            scene_pipeline(device, pipeline_layout, shader, output, cull_mode, 1, label)
+        };
+        Self {
+            two_sided: pipeline(None, "houdon_surface_pipeline"),
+            one_sided: pipeline(Some(wgpu::Face::Back), "houdon_one_sided_surface_pipeline"),
+        }
+    }
+}
+
 impl ScenePipelines {
     fn new(
         device: &wgpu::Device,
@@ -699,12 +752,16 @@ impl ScenePipelines {
         target_format: wgpu::TextureFormat,
         samples: u32,
     ) -> Self {
+        let output = SceneOutput {
+            entry_point: "fs_main",
+            format: target_format,
+        };
         let pipeline = |cull_mode, label| {
             scene_pipeline(
                 device,
                 pipeline_layout,
                 shader,
-                target_format,
+                output,
                 cull_mode,
                 samples,
                 label,
@@ -773,11 +830,19 @@ fn wireframe_pipeline(
     })
 }
 
+/// What a scene pipeline draws: the colour (`fs_main`) or the surfaces for
+/// the screen-space overlays (`fs_surface`).
+#[derive(Clone, Copy)]
+struct SceneOutput {
+    entry_point: &'static str,
+    format: wgpu::TextureFormat,
+}
+
 fn scene_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    target_format: wgpu::TextureFormat,
+    output: SceneOutput,
     cull_mode: Option<wgpu::Face>,
     samples: u32,
     label: &str,
@@ -817,19 +882,12 @@ fn scene_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: NORMAL_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
+            entry_point: Some(output.entry_point),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: output.format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         multiview_mask: None,

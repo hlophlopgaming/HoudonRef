@@ -58,6 +58,7 @@ impl Studio {
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let aspect = rect.width() / rect.height().max(1.0);
         self.view_aspect = aspect;
+        self.view_size = physical_size(rect, ui.ctx().pixels_per_point());
 
         if self.scene.object_count() > 0 {
             match self.pending_frame.take() {
@@ -122,7 +123,7 @@ impl Studio {
             rect,
             ViewportCallback {
                 frame: Frame::from_scene(&self.scene, aspect),
-                size: physical_size(rect, ui.ctx().pixels_per_point()),
+                size: self.view_size,
                 anti_aliasing: self.anti_aliasing,
             },
         ));

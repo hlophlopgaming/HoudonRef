@@ -68,6 +68,8 @@ pub struct HoudonApp {
     figure_height: f32,
     anti_aliasing: bool,
     settings_open: bool,
+    /// Only the Studio's viewport shows, to draw from the screen.
+    presentation: bool,
 }
 
 impl HoudonApp {
@@ -102,6 +104,9 @@ impl HoudonApp {
         let localizer = Localizer::new(language);
         let mut studio = Studio::new();
         studio.load_presets(&localizer);
+        if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+            studio.set_render_state(render_state);
+        }
         Self {
             localizer,
             section: settings.section,
@@ -110,6 +115,28 @@ impl HoudonApp {
             figure_height,
             anti_aliasing: settings.anti_aliasing.unwrap_or(true),
             settings_open: false,
+            presentation: false,
+        }
+    }
+
+    /// Presentation mode: P (or the toolbar's button) hides every panel in
+    /// the Studio; P or Escape brings them back. Not while typing.
+    fn toggle_presentation(&mut self, ctx: &egui::Context) {
+        if self.section != Section::Studio {
+            self.presentation = false;
+            return;
+        }
+        let typing = ctx.egui_wants_keyboard_input();
+        let (p, escape) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::P),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if self.studio.take_presentation_request() || (p && !typing) {
+            self.presentation = !self.presentation;
+        } else if escape && self.presentation {
+            self.presentation = false;
         }
     }
 
@@ -174,14 +201,17 @@ impl eframe::App for HoudonApp {
         self.studio
             .apply_settings(self.units, self.figure_height, self.anti_aliasing);
 
-        egui::Panel::top("top_bar").show(ui, |ui| {
-            ui.add_space(4.0);
-            self.top_bar(ui);
-            ui.add_space(4.0);
-        });
+        self.toggle_presentation(ui.ctx());
+        if !self.presentation {
+            egui::Panel::top("top_bar").show(ui, |ui| {
+                ui.add_space(4.0);
+                self.top_bar(ui);
+                ui.add_space(4.0);
+            });
+        }
 
         match self.section {
-            Section::Studio => self.studio.ui(ui, &self.localizer),
+            Section::Studio => self.studio.ui(ui, &self.localizer, self.presentation),
             Section::Atlas => coming_soon(ui, &self.localizer.tr("atlas-coming")),
             Section::Atelier => coming_soon(ui, &self.localizer.tr("atelier-coming")),
         }

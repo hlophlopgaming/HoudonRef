@@ -239,23 +239,35 @@ fn default_file_name(kind: FileKind) -> &'static str {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn write_ron(bytes: &[u8], label: &str, file_name: &str) -> Result<(), String> {
+    write_file(bytes, label, "ron", file_name)
+}
+
+/// Saves `bytes` where the artist chooses in a save dialog, as a file
+/// ending in `.extension`. Cancelling the dialog is not an error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn write_file(
+    bytes: &[u8],
+    label: &str,
+    extension: &str,
+    file_name: &str,
+) -> Result<(), String> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter(label, &["ron"])
+        .add_filter(label, &[extension])
         .set_file_name(file_name)
         .save_file()
     else {
         return Ok(());
     };
-    write_scene_to_path(bytes, path).map_err(|error| error.to_string())
+    write_to_path(bytes, path, extension).map_err(|error| error.to_string())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn write_scene_to_path(bytes: &[u8], mut path: PathBuf) -> std::io::Result<()> {
+fn write_to_path(bytes: &[u8], mut path: PathBuf, wanted: &str) -> std::io::Result<()> {
     use std::io::Write;
 
-    let add_extension = extension(&file_name(&path)) != "ron";
+    let add_extension = extension(&file_name(&path)) != wanted;
     if add_extension {
-        path.as_mut_os_string().push(".ron");
+        path.as_mut_os_string().push(format!(".{wanted}"));
     }
     let directory = path
         .parent()
@@ -273,7 +285,18 @@ fn write_scene_to_path(bytes: &[u8], mut path: PathBuf) -> std::io::Result<()> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn write_ron(bytes: &[u8], _label: &str, file_name: &str) -> Result<(), String> {
+pub(super) fn write_ron(bytes: &[u8], label: &str, file_name: &str) -> Result<(), String> {
+    write_file(bytes, label, "ron", file_name)
+}
+
+/// Downloads `bytes` as `file_name`.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn write_file(
+    bytes: &[u8],
+    _label: &str,
+    _extension: &str,
+    file_name: &str,
+) -> Result<(), String> {
     web::download(bytes, file_name).map_err(|error| format!("{error:?}"))
 }
 
@@ -385,7 +408,7 @@ mod tests {
         assert!(referenced.contains("Path("));
         assert_eq!(embedded.matches("Embedded(").count(), 2);
         let scene_path = directory.path().join("study.ron");
-        write_scene_to_path(referenced.as_bytes(), scene_path.clone()).unwrap();
+        write_to_path(referenced.as_bytes(), scene_path.clone(), "ron").unwrap();
 
         let mut restored = Studio::new();
         let document = std::fs::read(&scene_path).unwrap();
@@ -417,7 +440,7 @@ mod tests {
 
         let without_extension = directory.path().join("study");
         assert_eq!(
-            write_scene_to_path(b"would overwrite", without_extension)
+            write_to_path(b"would overwrite", without_extension, "ron")
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::AlreadyExists

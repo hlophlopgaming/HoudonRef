@@ -28,6 +28,7 @@ studio-camera-hint =
     Щелчок: выделить · двойной щелчок: показать целиком
     Delete: удалить выделенный объект
     V: включить и выключить тональный разбор
+    P: презентация, только вид (P или Esc — выйти)
 studio-drop-hint = Перетащите файл .glb или .gltf в окно, чтобы добавить его.
 
 studio-camera = Камера
@@ -242,3 +243,19 @@ preset-load-error = Не удалось прочитать сохранённы�
 preset-save-error = Не удалось сохранить пресет: { $reason }
 preset-import-error = Не удалось импортировать пресет: { $reason }
 preset-export-error = Не удалось экспортировать пресет: { $reason }
+
+studio-ambient-occlusion = Затенение в углах (AO)
+ambient-occlusion-hint = Затемняет углы, места касания, складки и впадины, куда меньше попадает свет окружения. Только в режиме Lit.
+ambient-occlusion-strength = Сила
+ambient-occlusion-radius = Радиус
+ambient-occlusion-samples = Качество
+ambient-occlusion-samples-hint = Выборок на пиксель: больше — глаже, но медленнее.
+
+export-title = Сохранить вид картинкой
+export-window = PNG, размер окна…
+export-double = PNG, вдвое больше окна…
+export-large = PNG, 4096 пикселей…
+png-file-type = Картинка PNG
+export-error = Не удалось сохранить картинку: { $reason }
+toolbar-presentation = Презентация
+toolbar-presentation-hint = Скрыть все панели и показать только вид (P). P или Esc возвращают их.

@@ -93,6 +93,37 @@ impl Default for Cavity {
     }
 }
 
+/// Ambient occlusion in the Lit mode: contact areas, folds and hollows
+/// darken as the room's light reaches them less.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AmbientOcclusion {
+    pub enabled: bool,
+    /// How dark fully covered places get, 0 to 1.
+    pub strength: f32,
+    /// How far around a point other surfaces shade it, metres.
+    pub radius: f32,
+    /// Samples per pixel: the quality, which automatic quality tunes.
+    pub samples: u32,
+}
+
+impl AmbientOcclusion {
+    pub const MAX_RADIUS: f32 = 2.0;
+    pub const MIN_SAMPLES: u32 = 4;
+    pub const MAX_SAMPLES: u32 = 32;
+}
+
+impl Default for AmbientOcclusion {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            strength: 0.8,
+            radius: 0.3,
+            samples: 16,
+        }
+    }
+}
+
 /// Line overlays for studying the drawing of a form, in Solid and Lit.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Lines {
@@ -146,6 +177,9 @@ pub struct Shading {
     pub clay_color: Vec3,
     /// A value study laid over the finished picture.
     pub value: ValueStudy,
+    /// In the Lit mode. Scene files from before it existed get the default.
+    #[serde(default)]
+    pub ambient_occlusion: AmbientOcclusion,
 }
 
 impl Default for Shading {
@@ -160,6 +194,7 @@ impl Default for Shading {
             color: ColorSource::default(),
             clay_color: DEFAULT_CLAY_COLOR,
             value: ValueStudy::default(),
+            ambient_occlusion: AmbientOcclusion::default(),
         }
     }
 }

@@ -45,6 +45,8 @@ Done:
 - [x] Solid shading mode: Studio, Matcap and Flat light; 27 Blender matcaps and the artist's own images (#15).
 - [x] Cavity, from the mesh and from the screen, in Solid and Lit (#16).
 - [x] Contour lines, wireframe and backface culling (#17).
+- [x] Ambient occlusion in the Lit mode, with strength, radius and quality (#9).
+- [x] PNG export at window size, 2× or 4096 px, and presentation mode (P) (#10).
 - [x] Scene files with optional model embedding on desktop and portable downloads on the web (#11).
 - [x] Light presets with built-ins, local storage, and RON import and export (#18).
 - [x] Camera presets (front, three-quarter, profile, from above, from below; framing the whole scene or the selection) and the artist's own camera and room presets (#18).
@@ -53,7 +55,7 @@ Done:
 Next:
 
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
-- [ ] Ambient occlusion (#9), PNG export and presentation mode (#10), automatic quality (#19).
+- [ ] Automatic quality (#19).
 
 Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.
 
