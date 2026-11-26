@@ -1,4 +1,8 @@
-//! Static triangle meshes loaded from glTF.
+//! Static triangle meshes loaded from glTF or OBJ.
+
+mod obj;
+
+pub use obj::ObjImport;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Mat4, Vec3, Vec4};
@@ -109,6 +113,8 @@ pub struct MeshPart {
 pub enum LoadError {
     #[error("invalid glTF file: {0}")]
     Gltf(#[from] gltf::Error),
+    #[error("invalid OBJ file: {0}")]
+    Obj(String),
     #[error("the file contains no triangle meshes")]
     NoMeshes,
 }

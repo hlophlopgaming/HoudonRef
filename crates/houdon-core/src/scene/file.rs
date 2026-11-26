@@ -21,7 +21,18 @@ pub enum ModelSource {
         builtin: Option<String>,
         #[serde(with = "base64_bytes")]
         bytes: std::sync::Arc<[u8]>,
+        /// Files the model reads besides itself: an OBJ's MTL and textures.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<EmbeddedFile>,
     },
+}
+
+/// A file an embedded model reads, by the name the model gives it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddedFile {
+    pub name: String,
+    #[serde(with = "base64_bytes")]
+    pub bytes: std::sync::Arc<[u8]>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -353,6 +364,7 @@ mod tests {
                 Some(ModelSource::Embedded {
                     builtin: None,
                     bytes: Arc::from(MODEL),
+                    files: Vec::new(),
                 })
             })
             .unwrap();
@@ -391,6 +403,7 @@ mod tests {
                 .to_ron(|_| Some(ModelSource::Embedded {
                     builtin: None,
                     bytes: Arc::from(MODEL),
+                    files: Vec::new(),
                 }))
                 .unwrap(),
             document

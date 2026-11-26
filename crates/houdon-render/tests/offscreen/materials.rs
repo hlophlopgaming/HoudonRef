@@ -129,3 +129,38 @@ fn a_model_without_materials_looks_like_clay() {
     scene.shading.color = ColorSource::Clay;
     assert_eq!(render(&mut renderer, &scene), as_material);
 }
+
+#[test]
+fn an_obj_object_shows_the_colour_of_its_mtl_material() {
+    use houdon_core::ColorSource;
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    const OBJ: &[u8] = include_bytes!("../../../../assets/models/test/green_cube.obj");
+    const MTL: &[u8] = include_bytes!("../../../../assets/models/test/green_cube.mtl");
+    let import = Model::from_obj("green cube", OBJ, |name| {
+        (name == "green_cube.mtl").then(|| MTL.to_vec())
+    })
+    .unwrap();
+    let scene_with = |color| {
+        let mut scene = Scene::new();
+        scene.room.visible = false;
+        scene.shading.color = color;
+        let id = scene.add_model(import.model.clone());
+        scene.add_object(id).unwrap();
+        scene.frame_camera(1.0);
+        scene
+    };
+    let material = scene_with(ColorSource::Material);
+    let image = render(&mut renderer, &material);
+    let (x, y) = pixel_of(&material, glam::Vec3::new(0.0, 0.2, 0.2));
+    let green = image.pixel(x, y);
+    assert!(
+        green[1] > green[0] + 60 && green[1] > green[2] + 60,
+        "the MTL's green: {green:?}"
+    );
+    let clay = scene_with(ColorSource::Clay);
+    let grey = render(&mut renderer, &clay).pixel(x, y);
+    let spread = grey[..3].iter().max().unwrap() - grey[..3].iter().min().unwrap();
+    assert!(spread < 12, "Clay covers it: {grey:?}");
+}

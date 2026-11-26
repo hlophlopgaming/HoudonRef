@@ -54,7 +54,8 @@ Done:
 
 Next:
 
-- [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
+- [x] OBJ import with MTL materials and textures (#14).
+- Not planned: desktop `.blend` import through an installed Blender (#8); a `.blend` shows how to export glTF from Blender instead.
 - [x] Automatic quality (#19).
 
 Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.

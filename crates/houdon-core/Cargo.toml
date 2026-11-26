@@ -11,9 +11,13 @@ rust-version.workspace = true
 bytemuck.workspace = true
 glam = { workspace = true, features = ["serde"] }
 gltf.workspace = true
-# Decodes light masks (PNG, JPEG) and matcaps (Blender ships them as EXR).
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "exr"] }
+# Decodes light masks (PNG, JPEG), matcaps (Blender ships them as EXR) and
+# OBJ material textures (often TGA or BMP).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "exr", "tga", "bmp"] }
+# Reads OBJ models and their MTL materials.
+tobj = { version = "4", default-features = false }
 thiserror.workspace = true
+log.workspace = true
 base64 = "0.13"
 ron = "0.12"
 serde = { version = "1", features = ["derive", "rc"] }

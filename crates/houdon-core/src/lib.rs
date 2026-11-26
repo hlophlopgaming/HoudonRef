@@ -20,7 +20,7 @@ pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
 pub use light_preset::{LightPreset, LightPresetError};
 pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
 pub use matcap::{Matcap, MatcapError, MatcapImage};
-pub use model::{Bounds, LoadError, Material, MeshPart, Model, TextureImage, Vertex};
+pub use model::{Bounds, LoadError, Material, MeshPart, Model, ObjImport, TextureImage, Vertex};
 pub use preset::{CameraPreset, CameraTarget, MAX_PRESET_NAME_BYTES, PresetError, RoomPreset};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{
