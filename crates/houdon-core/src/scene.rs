@@ -133,7 +133,7 @@ fn wrap_angle(radians: f32) -> f32 {
 }
 
 /// Distance along a ray to where it enters a box, or `None` if it misses.
-fn ray_box_distance(origin: Vec3, direction: Vec3, bounds: &Bounds) -> Option<f32> {
+pub(crate) fn ray_box_distance(origin: Vec3, direction: Vec3, bounds: &Bounds) -> Option<f32> {
     if bounds.is_empty() {
         return None;
     }

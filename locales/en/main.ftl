@@ -18,6 +18,17 @@ atlas-look = Look
 atlas-color-natural = Natural
 atlas-frame = Frame the body
 atlas-credit = Anatomy: Z-Anatomy (CC BY-SA 4.0), built on BodyParts3D (CC BY 4.0).
+atlas-search = Search by name…
+atlas-search-none = Nothing found.
+atlas-isolate-found = Show only these
+atlas-isolate = Show only this
+atlas-hide = Hide
+atlas-frame-selected = Frame it
+atlas-select-hint = Click a bone or a muscle to see its name.
+atlas-show-all = Show everything again
+atlas-structures = All structures
+atlas-left = { $name } (left)
+atlas-right = { $name } (right)
 atelier-coming = The drawing atelier is coming: timed sessions that go from a Loomis ball to planes to a detailed head, with changing angles and light.
 
 model-stats = { $triangles } triangles

@@ -1,10 +1,16 @@
 //! What the Atlas tab shows: which layers, how solid, and the camera, light
 //! and shading it is seen with.
 
+use std::collections::HashSet;
+
 use glam::Vec3;
 
 use super::{Atlas, BodySystem, Structure, Tissue};
+use crate::scene::ray_box_distance;
 use crate::{Bounds, ModelId, Scene};
+
+/// A structure's place in its atlas.
+pub type StructureIndex = usize;
 
 /// A group of structures shown or hidden together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,11 +58,11 @@ impl LayerState {
     /// The least opacity a see-through layer gets, so it never vanishes.
     pub const MIN_OPACITY: f32 = 0.1;
 
-    const SHOWN: Self = Self {
+    pub const SHOWN: Self = Self {
         visible: true,
         opacity: 1.0,
     };
-    const HIDDEN: Self = Self {
+    pub const HIDDEN: Self = Self {
         visible: false,
         opacity: 1.0,
     };
@@ -83,9 +89,11 @@ impl Tissue {
 /// One structure to draw.
 #[derive(Debug, Clone, Copy)]
 pub struct ShownStructure<'a> {
+    pub index: StructureIndex,
     pub structure: &'a Structure,
     pub model_id: ModelId,
     pub opacity: f32,
+    pub selected: bool,
 }
 
 /// The Atlas tab: the body, its layers and the view of it.
@@ -95,6 +103,11 @@ pub struct AtlasView {
     model_ids: Vec<ModelId>,
     layers: [LayerState; 4],
     bounds: Bounds,
+    selected: Option<StructureIndex>,
+    /// Hidden one by one; a hidden structure hides its parts too.
+    hidden: HashSet<StructureIndex>,
+    /// When set, only these are shown, whatever their layers.
+    isolated: Option<HashSet<StructureIndex>>,
     /// The camera, lights, room and shading the body is seen with; it
     /// holds no objects of its own.
     pub scene: Scene,
@@ -120,6 +133,9 @@ impl AtlasView {
                 LayerState::HIDDEN,
             ],
             bounds,
+            selected: None,
+            hidden: HashSet::new(),
+            isolated: None,
             scene,
         };
         view.frame(1.0);
@@ -147,14 +163,185 @@ impl AtlasView {
             .structures()
             .iter()
             .zip(&self.model_ids)
-            .filter_map(|(structure, &model_id)| {
+            .enumerate()
+            .filter_map(|(index, (structure, &model_id))| {
                 let state = self.layers[Layer::of(structure).index()];
-                state.visible.then_some(ShownStructure {
+                let shown = match &self.isolated {
+                    Some(isolated) => isolated.contains(&index),
+                    None => state.visible && !self.is_hidden(index),
+                };
+                shown.then_some(ShownStructure {
+                    index,
                     structure,
                     model_id,
-                    opacity: state.opacity,
+                    opacity: if self.isolated.is_some() {
+                        1.0
+                    } else {
+                        state.opacity
+                    },
+                    selected: self.selected == Some(index),
                 })
             })
+    }
+
+    /// Whether `index` or a structure it is part of was hidden.
+    fn is_hidden(&self, index: StructureIndex) -> bool {
+        let mut current = Some(index);
+        // Parents are few and shallow; the bound guards against a cycle.
+        for _ in 0..16 {
+            let Some(i) = current else {
+                return false;
+            };
+            if self.hidden.contains(&i) {
+                return true;
+            }
+            current = self.atlas.structures()[i]
+                .parent
+                .as_deref()
+                .and_then(|parent| self.index_of(parent));
+        }
+        false
+    }
+
+    pub fn index_of(&self, id: &str) -> Option<StructureIndex> {
+        self.atlas.structures().iter().position(|s| s.id == id)
+    }
+
+    pub fn selected(&self) -> Option<StructureIndex> {
+        self.selected
+    }
+
+    pub fn select(&mut self, index: Option<StructureIndex>) {
+        self.selected = index.filter(|&i| i < self.atlas.structures().len());
+    }
+
+    /// Shows only `indices`, whatever their layers.
+    pub fn isolate(&mut self, indices: impl IntoIterator<Item = StructureIndex>) {
+        let isolated: HashSet<_> = indices.into_iter().collect();
+        self.isolated = (!isolated.is_empty()).then_some(isolated);
+    }
+
+    pub fn is_isolating(&self) -> bool {
+        self.isolated.is_some()
+    }
+
+    /// Whether any structure was hidden one by one.
+    pub fn hides_any(&self) -> bool {
+        !self.hidden.is_empty()
+    }
+
+    /// Hides `index` and the structures that are part of it.
+    pub fn hide(&mut self, index: StructureIndex) {
+        if let Some(isolated) = &mut self.isolated {
+            isolated.remove(&index);
+            if isolated.is_empty() {
+                self.isolated = None;
+            }
+        }
+        self.hidden.insert(index);
+        if self.selected == Some(index) {
+            self.selected = None;
+        }
+    }
+
+    pub fn set_hidden(&mut self, index: StructureIndex, hidden: bool) {
+        if hidden {
+            self.hide(index);
+        } else {
+            self.hidden.remove(&index);
+        }
+    }
+
+    pub fn is_hidden_alone(&self, index: StructureIndex) -> bool {
+        self.hidden.contains(&index)
+    }
+
+    /// Ends isolation and shows every hidden structure again; the layers
+    /// stay as they are.
+    pub fn show_all(&mut self) {
+        self.isolated = None;
+        self.hidden.clear();
+    }
+
+    /// The nearest shown structure along a ray, if any. See-through layers
+    /// are passed through when something solid lies on the ray.
+    pub fn pick(&self, origin: Vec3, direction: Vec3) -> Option<StructureIndex> {
+        let direction = direction.normalize_or_zero();
+        if direction == Vec3::ZERO {
+            return None;
+        }
+        let mut solid: Option<(f32, StructureIndex)> = None;
+        let mut faint: Option<(f32, StructureIndex)> = None;
+        for shown in self.shown() {
+            let model = &shown.structure.model;
+            let Some(entry) = ray_box_distance(origin, direction, &model.bounds) else {
+                continue;
+            };
+            let nearest = if shown.opacity >= 0.5 {
+                &mut solid
+            } else {
+                &mut faint
+            };
+            if nearest.is_some_and(|(t, _)| entry > t) {
+                continue;
+            }
+            if let Some(t) = model.ray_hit(origin, direction)
+                && nearest.is_none_or(|(n, _)| t < n)
+            {
+                *nearest = Some((t, shown.index));
+            }
+        }
+        solid.or(faint).map(|(_, index)| index)
+    }
+
+    /// Structures whose name contains every word of `query`, in English or
+    /// Latin (or `other`, a translated name, where given), best matches
+    /// first: bones and muscles before fasciae and joints, then names that
+    /// start with the query, then shorter names.
+    pub fn search(
+        &self,
+        query: &str,
+        other: impl Fn(&Structure) -> Option<String>,
+    ) -> Vec<StructureIndex> {
+        let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<(bool, bool, usize, StructureIndex)> = self
+            .atlas
+            .structures()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, structure)| {
+                let names = [
+                    Some(structure.name.clone()),
+                    structure.latin.clone(),
+                    other(structure),
+                ];
+                names
+                    .into_iter()
+                    .flatten()
+                    .map(|name| name.to_lowercase())
+                    .find(|name| words.iter().all(|w| name.contains(w.as_str())))
+                    .map(|name| {
+                        let minor = matches!(Layer::of(structure), Layer::Fasciae | Layer::Joints);
+                        (minor, !name.starts_with(&words[0]), name.len(), index)
+                    })
+            })
+            .collect();
+        found.sort();
+        found.into_iter().map(|(_, _, _, index)| index).collect()
+    }
+
+    /// Points the camera at the selected structure, or at what is shown.
+    pub fn frame_selected(&mut self, aspect: f32) {
+        match self.selected {
+            Some(index) => {
+                let bounds = self.atlas.structures()[index].model.bounds;
+                self.scene.camera.frame(&bounds, aspect);
+            }
+            None => self.frame(aspect),
+        }
     }
 
     /// The bounds of what is shown, or of the whole body when nothing is.
@@ -229,6 +416,113 @@ mod tests {
         view.set_layer(Layer::Muscles, LayerState::HIDDEN);
         assert!(shown(&view, Layer::Muscles).is_empty());
         assert!(!shown(&view, Layer::Bones).is_empty());
+    }
+
+    fn ray_at(view: &AtlasView, id: &str) -> (Vec3, Vec3) {
+        // From in front of the body (+Z) straight at the structure.
+        let centre = view.atlas().structure(id).unwrap().model.bounds.center();
+        (centre + Vec3::new(0.0, 0.0, 2.0), Vec3::NEG_Z)
+    }
+
+    #[test]
+    fn picking_finds_the_muscle_in_front_and_the_bone_once_muscles_are_hidden() {
+        let mut view = AtlasView::new(human());
+        let femur = view.index_of("Femur.l").unwrap();
+        let (origin, direction) = ray_at(&view, "Femur.l");
+        let hit = view.pick(origin, direction).unwrap();
+        let structure = &view.atlas().structures()[hit];
+        assert_eq!(Layer::of(structure), Layer::Muscles, "{}", structure.id);
+        view.set_layer(Layer::Muscles, LayerState::HIDDEN);
+        assert_eq!(view.pick(origin, direction), Some(femur));
+        assert_eq!(
+            view.pick(origin, -direction),
+            None,
+            "nothing behind the eye"
+        );
+    }
+
+    #[test]
+    fn search_finds_by_english_and_latin_best_first() {
+        let view = AtlasView::new(human());
+        let names = |query| {
+            view.search(query, |_| None)
+                .into_iter()
+                .map(|i| view.atlas().structures()[i].id.clone())
+                .collect::<Vec<_>>()
+        };
+        let deltoid = names("deltoid");
+        assert!(
+            deltoid[0].contains("deltoid muscle"),
+            "the muscle first: {deltoid:?}"
+        );
+        let femur = names("femur");
+        assert!(femur[..2].contains(&"Femur.l".to_owned()), "{femur:?}");
+        assert!(
+            names("sternocleidomastoid")
+                .iter()
+                .any(|id| id.starts_with("Sternocleidomastoid"))
+        );
+        let latin = names("musculus deltoideus");
+        let by_latin = names("deltoide");
+        assert!(!by_latin.is_empty(), "Latin: {latin:?}");
+        assert!(names("").is_empty());
+        let words = names("major pectoralis");
+        assert!(
+            words.iter().all(|id| id.contains("pectoralis major")),
+            "{words:?}"
+        );
+        assert!(!words.is_empty());
+        let russian = view.search("бедренная кость", |s| {
+            (s.name == "Femur").then(|| "Бедренная кость".to_owned())
+        });
+        assert_eq!(russian.len(), 2);
+    }
+
+    #[test]
+    fn isolating_hiding_and_showing_all() {
+        let mut view = AtlasView::new(human());
+        let all = view.shown().count();
+        let femurs = view.search("femur", |_| None);
+        view.isolate(femurs.iter().copied());
+        assert_eq!(view.shown().count(), femurs.len(), "only what is isolated");
+        view.set_layer(Layer::Bones, LayerState::HIDDEN);
+        assert_eq!(
+            view.shown().count(),
+            femurs.len(),
+            "isolation wins over layers"
+        );
+        view.set_layer(Layer::Bones, LayerState::SHOWN);
+        view.hide(femurs[0]);
+        assert_eq!(view.shown().count(), femurs.len() - 1);
+        view.show_all();
+        assert_eq!(view.shown().count(), all);
+        view.hide(femurs[0]);
+        assert_eq!(view.shown().count(), all - 1);
+        // A hidden structure hides its parts.
+        let child = view
+            .atlas()
+            .structures()
+            .iter()
+            .position(|s| {
+                s.parent.is_some()
+                    && Layer::of(s) != Layer::Fasciae
+                    && Layer::of(s) != Layer::Joints
+            })
+            .unwrap();
+        let parent = view
+            .index_of(view.atlas().structures()[child].parent.as_deref().unwrap())
+            .unwrap();
+        view.show_all();
+        view.hide(parent);
+        assert!(
+            view.shown().all(|s| s.index != child),
+            "the part goes with it"
+        );
+        view.select(Some(child));
+        assert!(
+            view.shown().all(|s| !s.selected),
+            "selection of a hidden part shows nothing"
+        );
     }
 
     #[test]

@@ -18,6 +18,17 @@ atlas-look = Вид
 atlas-color-natural = Естественный
 atlas-frame = Показать тело целиком
 atlas-credit = Анатомия: Z-Anatomy (CC BY-SA 4.0), на основе BodyParts3D (CC BY 4.0).
+atlas-search = Поиск по названию…
+atlas-search-none = Ничего не найдено.
+atlas-isolate-found = Показать только найденное
+atlas-isolate = Показать только это
+atlas-hide = Скрыть
+atlas-frame-selected = Приблизить
+atlas-select-hint = Щёлкните кость или мышцу, чтобы увидеть название.
+atlas-show-all = Снова показать всё
+atlas-structures = Все структуры
+atlas-left = { $name } (слева)
+atlas-right = { $name } (справа)
 atelier-coming = Ателье для рисования в работе: сессии на время, от шара Лумиса через плоскости к детальной голове, со сменой ракурса и света.
 
 model-stats = Треугольников: { $triangles }

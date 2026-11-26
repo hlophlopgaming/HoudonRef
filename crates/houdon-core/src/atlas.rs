@@ -11,7 +11,7 @@ use crate::Model;
 
 mod view;
 
-pub use view::{AtlasView, Layer, LayerState, ShownStructure};
+pub use view::{AtlasView, Layer, LayerState, ShownStructure, StructureIndex};
 
 /// The body system a structure belongs to: one of the Atlas's layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]

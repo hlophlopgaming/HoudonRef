@@ -168,7 +168,7 @@ impl Frame {
                 model: Arc::clone(&shown.structure.model),
                 transform: Mat4::IDENTITY,
                 surface: FrameSurface::Colors(ObjectColors::uniform(color)),
-                selected: false,
+                selected: shown.selected,
                 one_sided: false,
                 // A see-through layer would darken what it shows.
                 casts_shadows: shown.opacity >= 1.0,

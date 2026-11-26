@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use houdon_core::atlas::ATLAS_MANIFEST;
-use houdon_core::{Atlas, AtlasPack, AtlasView, ColorSource, Layer, LayerState, ShadingMode};
+use houdon_core::{Atlas, AtlasPack, AtlasView, ColorSource, Layer, LayerState, ShadingMode, Side};
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
@@ -46,8 +46,17 @@ pub struct AtlasTab {
     anti_aliasing: AntiAliasing,
     quality: RenderQuality,
     view_size: [u32; 2],
-    /// Frame the body once the view knows its proportions.
-    frame_pending: bool,
+    /// Frame the body (or the selection) once the view knows its
+    /// proportions.
+    frame_pending: Option<Framing>,
+    search: String,
+}
+
+/// What to point the camera at.
+#[derive(Clone, Copy, PartialEq)]
+enum Framing {
+    Shown,
+    Selected,
 }
 
 impl Default for AtlasTab {
@@ -57,7 +66,8 @@ impl Default for AtlasTab {
             anti_aliasing: AntiAliasing::VIEWPORT,
             quality: RenderQuality::default(),
             view_size: [1, 1],
-            frame_pending: true,
+            frame_pending: Some(Framing::Shown),
+            search: String::new(),
         }
     }
 }
@@ -122,8 +132,8 @@ impl AtlasTab {
             .min_size(200.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if panel(ui, tr, view) {
-                        self.frame_pending = true;
+                    if let Some(framing) = panel(ui, tr, view, &mut self.search) {
+                        self.frame_pending = Some(framing);
                     }
                 });
             });
@@ -132,10 +142,24 @@ impl AtlasTab {
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
             let aspect = rect.width() / rect.height().max(1.0);
             self.view_size = physical_size(rect, ui.ctx().pixels_per_point());
-            if std::mem::take(&mut self.frame_pending) || response.double_clicked() {
-                view.frame(aspect);
+            if response.double_clicked() {
+                self.frame_pending = Some(Framing::Selected);
+            }
+            match self.frame_pending.take() {
+                Some(Framing::Shown) => view.frame(aspect),
+                Some(Framing::Selected) => view.frame_selected(aspect),
+                None => {}
             }
             drive_camera(&mut view.scene.camera, ui, &response, rect);
+            if response.clicked()
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let ndc_x = (pointer.x - rect.left()) / rect.width() * 2.0 - 1.0;
+                let ndc_y = 1.0 - (pointer.y - rect.top()) / rect.height() * 2.0;
+                let (origin, direction) = view.scene.camera.ray(ndc_x, ndc_y, aspect);
+                let hit = view.pick(origin, direction);
+                view.select(hit);
+            }
             let painter = ui.painter_at(rect);
             let [r, g, b] = view.scene.room.backdrop_srgb();
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
@@ -154,10 +178,72 @@ impl AtlasTab {
     }
 }
 
-/// The side panel: layers, shading and credits. Returns whether the view
-/// should be framed again.
-fn panel(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView) -> bool {
-    let mut frame = false;
+/// The side panel: search, the selection, layers, shading, the list of
+/// structures and credits. Returns what to frame, if anything.
+fn panel(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    view: &mut AtlasView,
+    search: &mut String,
+) -> Option<Framing> {
+    let mut framing = None;
+    ui.add(
+        egui::TextEdit::singleline(search)
+            .hint_text(tr.tr("atlas-search"))
+            .desired_width(f32::INFINITY),
+    );
+    if !search.trim().is_empty() {
+        let found = view.search(search, |_| None);
+        if found.is_empty() {
+            ui.weak(tr.tr("atlas-search-none"));
+        }
+        for &index in found.iter().take(30) {
+            let name = display_name(&view.atlas().structures()[index], tr);
+            if ui
+                .selectable_label(view.selected() == Some(index), name)
+                .clicked()
+            {
+                view.select(Some(index));
+                framing = Some(Framing::Selected);
+            }
+        }
+        if found.len() > 1 && ui.button(tr.tr("atlas-isolate-found")).clicked() {
+            view.isolate(found);
+            framing = Some(Framing::Shown);
+        }
+        ui.separator();
+    }
+
+    if let Some(index) = view.selected() {
+        let structure = &view.atlas().structures()[index];
+        ui.strong(display_name(structure, tr));
+        if let Some(latin) = &structure.latin {
+            ui.label(egui::RichText::new(latin).italics());
+        }
+        ui.weak(tr.tr(layer_message_id(Layer::of(structure))));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(tr.tr("atlas-isolate")).clicked() {
+                view.isolate([index]);
+                framing = Some(Framing::Selected);
+            }
+            if ui.button(tr.tr("atlas-hide")).clicked() {
+                view.hide(index);
+            }
+            if ui.button(tr.tr("atlas-frame-selected")).clicked() {
+                framing = Some(Framing::Selected);
+            }
+        });
+        ui.separator();
+    } else {
+        ui.weak(tr.tr("atlas-select-hint"));
+        ui.separator();
+    }
+
+    if (view.is_isolating() || view.hides_any()) && ui.button(tr.tr("atlas-show-all")).clicked() {
+        view.show_all();
+        framing = Some(Framing::Shown);
+    }
+
     ui.heading(tr.tr("atlas-layers"));
     for layer in Layer::ALL {
         let mut state = view.layer(layer);
@@ -206,11 +292,63 @@ fn panel(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView) -> bool {
         tr.tr("studio-ambient-occlusion"),
     );
     if ui.button(tr.tr("atlas-frame")).clicked() {
-        frame = true;
+        framing = Some(Framing::Shown);
     }
     ui.separator();
+    structure_list(ui, tr, view, &mut framing);
+    ui.separator();
     ui.weak(tr.tr("atlas-credit"));
-    frame
+    framing
+}
+
+/// Every structure by layer, alphabetically, each with a box to hide it.
+fn structure_list(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    view: &mut AtlasView,
+    framing: &mut Option<Framing>,
+) {
+    ui.heading(tr.tr("atlas-structures"));
+    for layer in Layer::ALL {
+        egui::CollapsingHeader::new(tr.tr(layer_message_id(layer)))
+            .id_salt(("atlas-list", layer_message_id(layer)))
+            .show(ui, |ui| {
+                let mut rows: Vec<(String, usize)> = view
+                    .atlas()
+                    .structures()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| Layer::of(s) == layer)
+                    .map(|(i, s)| (display_name(s, tr), i))
+                    .collect();
+                rows.sort();
+                for (name, index) in rows {
+                    ui.horizontal(|ui| {
+                        let mut shown = !view.is_hidden_alone(index);
+                        if ui.checkbox(&mut shown, "").changed() {
+                            view.set_hidden(index, !shown);
+                        }
+                        if ui
+                            .selectable_label(view.selected() == Some(index), name)
+                            .clicked()
+                        {
+                            view.select(Some(index));
+                            *framing = Some(Framing::Selected);
+                        }
+                    });
+                }
+            });
+    }
+}
+
+/// A structure's name in the interface's language, with its side.
+fn display_name(structure: &houdon_core::Structure, tr: &Localizer) -> String {
+    let name = structure.name.clone();
+    match structure.side {
+        Side::Left => tr.tr_args("atlas-left", &[("name", name.into())]),
+        Side::Right => tr.tr_args("atlas-right", &[("name", name.into())]),
+        Side::Middle => name,
+    }
 }
 
 fn layer_message_id(layer: Layer) -> &'static str {
