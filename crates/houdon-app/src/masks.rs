@@ -524,8 +524,9 @@ impl MaskLibrary {
     }
 }
 
+/// The bytes at `url`, next to the page.
 #[cfg(target_arch = "wasm32")]
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
     let window = web_sys::window().ok_or("no window")?;

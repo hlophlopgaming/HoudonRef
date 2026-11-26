@@ -36,6 +36,7 @@ use files::{extension, file_name};
 use light_presets::LightPresets;
 use presets::{PresetAction, SavedPresets};
 use scene_files::{COMPANION_EXTENSIONS, Companion, FileKind, FileResult, ModelAsset};
+pub(crate) use viewport::{drive_camera, physical_size};
 pub use widgets::length_field;
 use widgets::*;
 

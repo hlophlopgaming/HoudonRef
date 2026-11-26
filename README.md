@@ -4,7 +4,7 @@
 
 <p align="center">Open-source tool for artists: an anatomy atlas, a 3D reference studio and a timed drawing atelier.</p>
 
-> Status: early development. The Studio can show a glTF model under adjustable light; Atlas and Atelier are not started. See the [roadmap](docs/ROADMAP.md).
+> Status: early development. The Studio sets up models, lights, rooms and shading to draw from; the Atlas shows the human écorché and skull, coloured by sculptural masses; the Atelier is not started. See the [roadmap](docs/ROADMAP.md).
 
 Code licence: [GPL-3.0](LICENSE). Logo and third-party content keep their own licences (see Credits).
 
@@ -83,7 +83,7 @@ drop onto the Studio brings back.
 
 - Name after Jean-Antoine Houdon, sculptor of the *Écorché* (1767).
 - Logo after *A kneeling écorché figure* by J. Gamelin (1778/79). Source image: [Wellcome Collection](https://wellcomecollection.org/works/gv249kuf), CC BY 4.0.
-- Planned anatomy data: [Écorché](https://github.com/Charleeh/ecorche) and [Z-Anatomy](https://www.z-anatomy.com/), both CC BY-SA 4.0. Anatomy content will ship as separate content packs under its own licence.
+- Atlas anatomy: *Z-Anatomy - The open source atlas of anatomy - CC-BY-SA 4.0* ([z-anatomy.com](https://www.z-anatomy.com/)), built on *BodyParts3D, © The Database Center for Life Science licensed under CC Attribution 4.0 International*. The pack in `assets/atlas/human/` keeps that licence, separate from the code; see [its NOTICE](assets/atlas/human/NOTICE).
 - Test models: *Planar Human Base Rigs* by dacancino, after a rig by Alexander Lee, CC BY 4.0. See [assets/models/test/CREDITS.md](assets/models/test/CREDITS.md).
 - Studio matcaps: Blender community, CC0 or public domain. See [assets/matcaps/CREDITS.md](assets/matcaps/CREDITS.md).
 - Reference heads: *Asaro-head* by Ivan Chakir, *Planar head (Oleg Toropygin)* by BlueHorse, *Zbrush head base* by hexmeff and *Wolfsaro Head - Anthro Canine Head Reference* by mmdrawstuff, all CC BY 4.0. See [assets/models/heads/CREDITS.md](assets/models/heads/CREDITS.md).

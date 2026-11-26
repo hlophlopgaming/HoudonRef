@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use houdon_core::{Light, Model, ModelId, Room, Scene, Shading, Surface};
+use houdon_core::{AtlasView, Light, Model, ModelId, Room, Scene, Shading, Surface};
 
 use crate::RenderQuality;
 
@@ -53,6 +53,9 @@ pub struct FrameObject {
     pub one_sided: bool,
     /// Casts shadows; the room only receives them.
     pub casts_shadows: bool,
+    /// 1 for a solid object; less to see through it. See-through objects
+    /// are drawn after the solid ones and leave no mark on the overlays.
+    pub opacity: f32,
 }
 
 /// Everything the renderer needs for one picture. Cheap to build every
@@ -107,6 +110,7 @@ impl Frame {
                         selected: false,
                         one_sided: true,
                         casts_shadows: false,
+                        opacity: 1.0,
                     }
                 });
         let objects = scene.objects().iter().filter_map(|object| {
@@ -122,6 +126,7 @@ impl Frame {
                 selected: scene.selected() == Some(object.id),
                 one_sided: false,
                 casts_shadows: true,
+                opacity: 1.0,
             })
         });
         let view = scene.camera.view();
@@ -144,6 +149,28 @@ impl Frame {
             aspect,
             quality: RenderQuality::default(),
         }
+    }
+
+    /// Takes a picture of what the Atlas shows, in place, with the view's
+    /// camera, lights and shading, each structure in the view's colour.
+    pub fn from_atlas(view: &AtlasView, aspect: f32) -> Self {
+        let mut frame = Self::from_scene(&view.scene, aspect);
+        frame.light_centre = view.shown_bounds().center();
+        frame.objects.extend(view.shown().map(|shown| {
+            let color = view.color(shown.structure);
+            FrameObject {
+                model_id: shown.model_id,
+                model: Arc::clone(&shown.structure.model),
+                transform: Mat4::IDENTITY,
+                surface: FrameSurface::Colors(ObjectColors::uniform(color)),
+                selected: shown.selected,
+                one_sided: false,
+                // A see-through layer would darken what it shows.
+                casts_shadows: shown.opacity >= 1.0,
+                opacity: shown.opacity,
+            }
+        }));
+        frame
     }
 
     /// The colour behind everything, 8-bit sRGB: the backdrop's.

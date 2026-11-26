@@ -1,0 +1,8 @@
+The anatomical models in this folder (atlas.ron and the .bin files) are
+licensed under the Creative Commons Attribution-ShareAlike 4.0 International
+licence (CC BY-SA 4.0): https://creativecommons.org/licenses/by-sa/4.0/
+
+They are adapted from Z-Anatomy, itself built on BodyParts3D. See NOTICE for
+the sources, the attributions they require and what was changed.
+
+They are not part of the code licence (GPL-3.0) of this repository.

@@ -3,6 +3,7 @@
 //! Nothing in this crate touches the GPU or the UI, so it can be unit-tested
 //! and reused by every section of the app (Atlas, Studio, Atelier).
 
+pub mod atlas;
 pub mod camera;
 pub mod light;
 pub mod light_preset;
@@ -15,6 +16,10 @@ pub mod scene;
 pub mod shading;
 pub mod units;
 
+pub use atlas::{
+    Atlas, AtlasColors, AtlasError, AtlasPack, AtlasView, BodySystem, Layer, LayerState,
+    ShownStructure, Side, Structure, Tissue, TranslatedName,
+};
 pub use camera::OrbitCamera;
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
 pub use light_preset::{LightPreset, LightPresetError};

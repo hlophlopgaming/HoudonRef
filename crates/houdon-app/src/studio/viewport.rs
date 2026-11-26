@@ -68,29 +68,7 @@ impl Studio {
             }
         }
 
-        let drag = response.drag_delta();
-        let height = rect.height().max(1.0);
-        let pan = response.dragged_by(egui::PointerButton::Secondary)
-            || response.dragged_by(egui::PointerButton::Middle)
-            || (response.dragged_by(egui::PointerButton::Primary)
-                && ui.input(|i| i.modifiers.shift));
-        if pan {
-            self.scene.camera.pan(drag.x / height, drag.y / height);
-        } else if response.dragged_by(egui::PointerButton::Primary) {
-            // A drag across the full viewport height turns the model half way round.
-            let speed = std::f32::consts::PI / height;
-            self.scene.camera.orbit(-drag.x * speed, drag.y * speed);
-        }
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            let pinch = ui.input(|i| i.zoom_delta());
-            if scroll != 0.0 {
-                self.scene.camera.dolly((-scroll * 0.002).exp());
-            }
-            if pinch != 1.0 {
-                self.scene.camera.dolly(1.0 / pinch);
-            }
-        }
+        drive_camera(&mut self.scene.camera, ui, &response, rect);
         if response.clicked()
             && let Some(pointer) = response.interact_pointer_pos()
         {
@@ -145,7 +123,40 @@ impl Studio {
 }
 
 /// The viewport's size in device pixels, as the GPU draws it.
-pub(super) fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
+/// Orbits the camera with the primary button, pans with the secondary or
+/// middle one (or Shift and the primary), and dollies with the wheel or a
+/// pinch, as the pointer moves over `rect`.
+pub(crate) fn drive_camera(
+    camera: &mut houdon_core::OrbitCamera,
+    ui: &egui::Ui,
+    response: &egui::Response,
+    rect: egui::Rect,
+) {
+    let drag = response.drag_delta();
+    let height = rect.height().max(1.0);
+    let pan = response.dragged_by(egui::PointerButton::Secondary)
+        || response.dragged_by(egui::PointerButton::Middle)
+        || (response.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.modifiers.shift));
+    if pan {
+        camera.pan(drag.x / height, drag.y / height);
+    } else if response.dragged_by(egui::PointerButton::Primary) {
+        // A drag across the full viewport height turns the model half way round.
+        let speed = std::f32::consts::PI / height;
+        camera.orbit(-drag.x * speed, drag.y * speed);
+    }
+    if response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        let pinch = ui.input(|i| i.zoom_delta());
+        if scroll != 0.0 {
+            camera.dolly((-scroll * 0.002).exp());
+        }
+        if pinch != 1.0 {
+            camera.dolly(1.0 / pinch);
+        }
+    }
+}
+
+pub(crate) fn physical_size(rect: egui::Rect, pixels_per_point: f32) -> [u32; 2] {
     let size = rect.size() * pixels_per_point;
     [
         size.x.round().max(1.0) as u32,
