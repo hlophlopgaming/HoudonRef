@@ -58,17 +58,24 @@ Not planned: desktop `.blend` import through an installed Blender (#8); a `.blen
 
 Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.
 
-## Stage 2: Atelier MVP
+## Stage 2: Atlas
+
+The Atlas comes before the Atelier. Stage 1 of the Atlas is specified in issue #39 and split into tickets #40 to #46.
+
+- [ ] Human content pack from Z-Anatomy (skeleton, muscles, joints; CC BY-SA 4.0), kept separate from the code and loaded when the Atlas opens (#40).
+- [ ] Layers, see-through muscles (#41); picking, names in English or Russian with Latin, search, isolate and hide (#42).
+- [ ] Muscles coloured by sculptural masses, with a legend (#43).
+- [ ] Russian names, marked for review (#44).
+- [ ] The skull bone by bone, with classic views (#45).
+- [ ] Open what the Atlas shows in the Studio (#46).
+
+Next Atlas stages: posing with a skeleton rig and muscles that thicken as they shorten and thin as they lengthen; dog and horse once open écorché models are found (open skeletons exist).
+
+## Stage 3: Atelier MVP
 
 - Timed sessions described by a series manifest (RON): steps, durations, camera angles, light.
 - Procedural primitives for the complexity progression: Loomis ball → planes → detailed head.
 - Camera angle and light change between rounds.
-
-## Stage 3: Atlas
-
-- Content pipeline: Z-Anatomy / Écorché → light glTF files by layer, shipped as a separate CC BY-SA content pack.
-- Content packs are downloaded on demand (GitHub Releases or a separate repository), not bundled in the web build.
-- Layer toggles, picking a muscle or bone, names in English, Russian and Latin.
 
 ## Stage 4: extensions
 

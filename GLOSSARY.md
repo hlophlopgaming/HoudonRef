@@ -12,6 +12,18 @@ _Avoid_: Anatomy viewer, encyclopedia
 The section where the artist sets up a model, its lights, room and camera to draw from.
 _Avoid_: Viewer, scene editor
 
+**Structure**:
+One named part of a body in the Atlas: a bone, a muscle, a ligament.
+_Avoid_: Part, mesh, object (an Object is a placement in the Studio's Scene)
+
+**Layer**:
+One body system shown or hidden as a whole in the Atlas: the skeleton, the muscles, the joints.
+_Avoid_: System (in the interface)
+
+**Mass**:
+A group of muscles an artist draws as one form, such as the pectoral or the deltoid, shown in its own colour.
+_Avoid_: Muscle group (in the interface)
+
 **Atelier**:
 The section for timed drawing sessions that change the subject, angle and light between rounds.
 _Avoid_: Trainer, practice mode

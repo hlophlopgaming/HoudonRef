@@ -1,0 +1,36 @@
+Human anatomy for the HoudonRef Atlas
+=====================================
+
+Required attributions, verbatim:
+
+    Z-Anatomy - The open source atlas of anatomy - CC-BY-SA 4.0
+
+    BodyParts3D, (c) The Database Center for Life Science licensed under
+    CC Attribution 4.0 International
+
+Sources
+-------
+
+- Z-Anatomy, https://www.z-anatomy.com/ (CC BY-SA 4.0): the named, grouped
+  and reworked meshes of the skeleton, muscles and joints, and the Latin
+  terms.
+- BodyParts3D, The Database Center for Life Science,
+  https://dbarchive.biosciencedbc.jp/en/bodyparts3d/ (CC BY 4.0 since
+  2025-02-27; earlier releases CC BY-SA 2.1 Japan): the anatomical geometry
+  Z-Anatomy is built on.
+- Taken from the browser export of Z-Anatomy in
+  https://github.com/nqwrc/3d-anatomy at commit
+  8ca3b7421bcfbe88b85859eb1983d5cf79f21749: public/models/skeletal.glb,
+  muscular.glb, joints.glb and public/data/lexicon.json.
+
+Not included: the non-commercial parts of Z-Anatomy (the inner ear,
+CC BY-NC-SA 4.0, and the kidney, CC BY-NC 4.0), nor organs, vessels or
+nerves.
+
+Changes
+-------
+
+The meshes were decoded from Draco compression and stored with positions
+quantised to 16 bits within each mesh's bounds; normals were left out and
+are recomputed by the app. Nothing was simplified, moved or reshaped. The
+tool that does this is tools/atlas/build_human_pack.py.
