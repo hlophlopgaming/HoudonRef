@@ -596,6 +596,7 @@ impl SceneRenderer {
             });
             self.draw_scene(&mut pass, true);
         }
+        self.composite.draw_occlusion(encoder);
         if wireframe {
             // Its own pass: WebGL2 cannot blend one target and not another.
             let (view, resolve_target) = color;
