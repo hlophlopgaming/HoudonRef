@@ -16,7 +16,7 @@ mod renderer;
 mod shadow;
 
 pub use composite::AntiAliasing;
-pub use frame::{Frame, FrameObject, FrameSurface, ObjectColors};
+pub use frame::{Frame, FrameObject, FrameSurface, Highlight, ObjectColors};
 pub use offscreen::{ExportSize, Image, OffscreenError, OffscreenRenderer, PendingImage};
 pub use quality::{QualityGovernor, QualityLevel, RenderQuality};
 pub use renderer::{SceneRenderer, ViewportCallback};

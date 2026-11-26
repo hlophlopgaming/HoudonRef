@@ -149,6 +149,8 @@ pub struct ShownStructure<'a> {
     pub opacity: f32,
     /// Selected, or in the mass the legend points at: drawn highlighted.
     pub selected: bool,
+    /// Under the pointer: drawn with a faint highlight.
+    pub hovered: bool,
     /// Fibre lines to draw on it, when fibres are on and it is a muscle.
     pub fibres: Option<Fibres>,
 }
@@ -170,6 +172,11 @@ pub struct AtlasView {
     pub show_fibres: bool,
     /// A mass to highlight, as the legend is pointed at.
     pub emphasis: Option<&'static Mass>,
+    /// The structure under the pointer.
+    pub hovered: Option<StructureIndex>,
+    /// While something is selected, everything else fades to a ghost, so
+    /// the selection reads whole even where other structures cover it.
+    pub fade_others: bool,
     /// Each structure's fibres, in the atlas's order.
     fibres: Vec<Option<Fibres>>,
     /// The camera, lights, room and shading the body is seen with; it
@@ -178,6 +185,9 @@ pub struct AtlasView {
 }
 
 impl AtlasView {
+    /// How solid the rest of the body stays while something is selected.
+    pub const GHOST_OPACITY: f32 = 0.12;
+
     pub fn new(atlas: Atlas) -> Self {
         let model_ids = atlas.structures().iter().map(|_| ModelId::next()).collect();
         let fibres = atlas.structures().iter().map(Fibres::of).collect();
@@ -214,6 +224,8 @@ impl AtlasView {
             colors: AtlasColors::default(),
             show_fibres: true,
             emphasis: None,
+            hovered: None,
+            fade_others: true,
             fibres,
             scene,
         };
@@ -249,20 +261,37 @@ impl AtlasView {
                     Some(isolated) => isolated.contains(&index),
                     None => state.visible && !self.is_hidden(index),
                 };
+                let opacity = self.resting_opacity(structure);
+                let opacity = match self.selected {
+                    // The selection reads solid even in a see-through layer.
+                    Some(selected) if selected == index => 1.0,
+                    Some(_) if self.fade_others => opacity.min(Self::GHOST_OPACITY),
+                    _ => opacity,
+                };
                 shown.then_some(ShownStructure {
                     index,
                     structure,
                     model_id,
-                    opacity: if self.isolated.is_some() {
-                        1.0
-                    } else {
-                        state.opacity
-                    },
+                    opacity,
                     selected: self.selected == Some(index)
                         || self.emphasis.is_some() && mass_of(structure) == self.emphasis,
-                    fibres: self.fibres[index].filter(|_| self.show_fibres),
+                    hovered: self.hovered == Some(index),
+                    // A ghost keeps only its shape: lines on it would be
+                    // noise in front of the selection.
+                    fibres: self.fibres[index]
+                        .filter(|_| self.show_fibres && opacity > Self::GHOST_OPACITY),
                 })
             })
+    }
+
+    /// How solid `structure` is when nothing fades it: its layer's
+    /// opacity, or fully solid while isolated.
+    fn resting_opacity(&self, structure: &Structure) -> f32 {
+        if self.isolated.is_some() {
+            1.0
+        } else {
+            self.layers[Layer::of(structure).index()].opacity
+        }
     }
 
     /// Whether `index` or a structure it is part of was hidden.
@@ -347,6 +376,12 @@ impl AtlasView {
     /// The nearest shown structure along a ray, if any. See-through layers
     /// are passed through when something solid lies on the ray.
     pub fn pick(&self, origin: Vec3, direction: Vec3) -> Option<StructureIndex> {
+        self.pick_hit(origin, direction).map(|(index, _)| index)
+    }
+
+    /// As [`Self::pick`], with how far along the ray the structure was
+    /// hit, so the point itself can be found.
+    pub fn pick_hit(&self, origin: Vec3, direction: Vec3) -> Option<(StructureIndex, f32)> {
         let direction = direction.normalize_or_zero();
         if direction == Vec3::ZERO {
             return None;
@@ -358,7 +393,9 @@ impl AtlasView {
             let Some(entry) = ray_box_distance(origin, direction, &model.bounds) else {
                 continue;
             };
-            let nearest = if shown.opacity >= 0.5 {
+            // A structure faded for the selection is still picked as the
+            // solid thing it is: a click on it means it.
+            let nearest = if self.resting_opacity(shown.structure) >= 0.5 {
                 &mut solid
             } else {
                 &mut faint
@@ -372,7 +409,7 @@ impl AtlasView {
                 *nearest = Some((t, shown.index));
             }
         }
-        solid.or(faint).map(|(_, index)| index)
+        solid.or(faint).map(|(t, index)| (index, t))
     }
 
     /// Structures whose name contains every word of `query`, in English or
@@ -657,6 +694,66 @@ mod tests {
             view.shown().all(|s| !s.selected),
             "selection of a hidden part shows nothing"
         );
+    }
+
+    #[test]
+    fn selecting_fades_the_rest_and_keeps_the_selection_solid() {
+        let mut view = AtlasView::new(human());
+        let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
+        let femur = view.index_of("Femur.l").unwrap();
+        let opacity = |view: &AtlasView, i| view.shown().find(|s| s.index == i).unwrap().opacity;
+        assert_eq!(
+            opacity(&view, femur),
+            1.0,
+            "nothing fades before a selection"
+        );
+        view.set_layer(
+            Layer::Muscles,
+            LayerState {
+                visible: true,
+                opacity: 0.4,
+            },
+        );
+        view.select(Some(biceps));
+        assert_eq!(opacity(&view, biceps), 1.0, "solid in a see-through layer");
+        assert_eq!(opacity(&view, femur), AtlasView::GHOST_OPACITY);
+        let other_muscle = view.index_of("Long head of biceps brachii.r").unwrap();
+        let fibres = |view: &AtlasView, i| view.shown().find(|s| s.index == i).unwrap().fibres;
+        assert!(fibres(&view, biceps).is_some());
+        assert!(fibres(&view, other_muscle).is_none(), "no lines on a ghost");
+        view.fade_others = false;
+        assert_eq!(opacity(&view, femur), 1.0);
+        view.fade_others = true;
+        view.select(None);
+        assert_eq!(opacity(&view, femur), 1.0);
+        assert_eq!(opacity(&view, biceps), 0.4);
+    }
+
+    #[test]
+    fn a_faded_structure_is_still_picked_first() {
+        let mut view = AtlasView::new(human());
+        let femur = view.index_of("Femur.l").unwrap();
+        let (origin, direction) = ray_at(&view, "Femur.l");
+        let muscle = view.pick(origin, direction).unwrap();
+        // The bone behind is selected; the muscle in front fades but a
+        // click on it still finds it, not the bone.
+        view.select(Some(femur));
+        let (hit, distance) = view.pick_hit(origin, direction).unwrap();
+        assert_eq!(hit, muscle);
+        assert!(distance > 0.0 && distance < 2.0);
+    }
+
+    #[test]
+    fn only_the_structure_under_the_pointer_is_hovered() {
+        let mut view = AtlasView::new(human());
+        let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
+        view.hovered = Some(biceps);
+        let hovered: Vec<_> = view
+            .shown()
+            .filter(|s| s.hovered)
+            .map(|s| s.index)
+            .collect();
+        assert_eq!(hovered, [biceps]);
     }
 
     #[test]
