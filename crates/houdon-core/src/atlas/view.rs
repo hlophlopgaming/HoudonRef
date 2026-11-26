@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use glam::Vec3;
 
 use super::masses::{DEEP_MUSCLE_SRGB, Mass, mass_of};
-use super::{Atlas, BodySystem, Structure, Tissue};
+use super::{Atlas, BodySystem, Fibres, Structure, Tissue};
 use crate::scene::ray_box_distance;
 use crate::{Bounds, ModelId, Scene};
 
@@ -147,7 +147,10 @@ pub struct ShownStructure<'a> {
     pub structure: &'a Structure,
     pub model_id: ModelId,
     pub opacity: f32,
+    /// Selected, or in the mass the legend points at: drawn highlighted.
     pub selected: bool,
+    /// Fibre lines to draw on it, when fibres are on and it is a muscle.
+    pub fibres: Option<Fibres>,
 }
 
 /// The Atlas tab: the body, its layers and the view of it.
@@ -163,6 +166,12 @@ pub struct AtlasView {
     /// When set, only these are shown, whatever their layers.
     isolated: Option<HashSet<StructureIndex>>,
     pub colors: AtlasColors,
+    /// Fibre lines on the muscles.
+    pub show_fibres: bool,
+    /// A mass to highlight, as the legend is pointed at.
+    pub emphasis: Option<&'static Mass>,
+    /// Each structure's fibres, in the atlas's order.
+    fibres: Vec<Option<Fibres>>,
     /// The camera, lights, room and shading the body is seen with; it
     /// holds no objects of its own.
     pub scene: Scene,
@@ -171,6 +180,7 @@ pub struct AtlasView {
 impl AtlasView {
     pub fn new(atlas: Atlas) -> Self {
         let model_ids = atlas.structures().iter().map(|_| ModelId::next()).collect();
+        let fibres = atlas.structures().iter().map(Fibres::of).collect();
         let bounds = atlas
             .structures()
             .iter()
@@ -178,6 +188,16 @@ impl AtlasView {
         let mut scene = Scene::new();
         // A plain backdrop: the room is sized for the Studio's objects.
         scene.room.visible = false;
+        // A light page, as in a book of anatomy for artists: the studio
+        // light without cast shadows, clean outlines between forms.
+        scene.room.backdrop_color = Vec3::splat(0.72);
+        scene.shading.mode = crate::ShadingMode::Solid;
+        scene.shading.solid = crate::SolidLighting::Studio;
+        scene.shading.lines.contours = true;
+        scene.shading.lines.color = Vec3::new(0.10, 0.07, 0.06);
+        // Outlines only: the meshes' fine folds and thin layers lying on
+        // each other would scatter fold lines like dirt.
+        scene.shading.lines.fold_sensitivity = 0.0;
         let mut view = Self {
             atlas,
             model_ids,
@@ -192,6 +212,9 @@ impl AtlasView {
             hidden: HashSet::new(),
             isolated: None,
             colors: AtlasColors::default(),
+            show_fibres: true,
+            emphasis: None,
+            fibres,
             scene,
         };
         view.frame(1.0);
@@ -235,7 +258,9 @@ impl AtlasView {
                     } else {
                         state.opacity
                     },
-                    selected: self.selected == Some(index),
+                    selected: self.selected == Some(index)
+                        || self.emphasis.is_some() && mass_of(structure) == self.emphasis,
+                    fibres: self.fibres[index].filter(|_| self.show_fibres),
                 })
             })
     }
@@ -647,6 +672,26 @@ mod tests {
             cartilage.z / cartilage.x > bone.z / bone.x,
             "a little cooler"
         );
+    }
+
+    #[test]
+    fn the_view_opens_like_a_page_of_an_anatomy_book() {
+        let mut view = AtlasView::new(human());
+        assert_eq!(view.scene.shading.mode, crate::ShadingMode::Solid);
+        assert!(view.scene.shading.lines.contours);
+        assert!(view.scene.room.backdrop_color.x > 0.5, "a light page");
+        let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
+        let femur = view.index_of("Femur.l").unwrap();
+        let fibres = |view: &AtlasView, i| view.shown().find(|s| s.index == i).unwrap().fibres;
+        assert!(fibres(&view, biceps).is_some());
+        assert!(fibres(&view, femur).is_none());
+        view.show_fibres = false;
+        assert!(fibres(&view, biceps).is_none());
+        // The legend points at a mass: its muscles light up, no others.
+        let mass = mass_of(&view.atlas().structures()[biceps]).unwrap();
+        view.emphasis = Some(mass);
+        assert!(view.shown().find(|s| s.index == biceps).unwrap().selected);
+        assert!(!view.shown().find(|s| s.index == femur).unwrap().selected);
     }
 
     #[test]

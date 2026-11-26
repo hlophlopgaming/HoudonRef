@@ -61,7 +61,18 @@ pub struct AtlasTab {
     search: String,
     /// A model to open in the Studio: its name and binary glTF.
     to_studio: Option<(String, Vec<u8>)>,
+    /// The structure under the pointer, and where and when it was found.
+    hover: Option<Hover>,
 }
+
+struct Hover {
+    pointer: egui::Pos2,
+    time: f64,
+    index: Option<usize>,
+}
+
+/// The least time between two picks under a moving pointer, seconds.
+const HOVER_INTERVAL: f64 = 0.06;
 
 /// What to point the camera at.
 #[derive(Clone, Copy, PartialEq)]
@@ -82,6 +93,7 @@ impl Default for AtlasTab {
             frame_pending: Some(Framing::Shown),
             search: String::new(),
             to_studio: None,
+            hover: None,
         }
     }
 }
@@ -130,11 +142,7 @@ impl AtlasTab {
             return;
         };
         self.state = match result {
-            Ok(atlas) => {
-                let mut view = AtlasView::new(atlas);
-                view.scene.shading.mode = ShadingMode::Lit;
-                State::Ready(Box::new(view))
-            }
+            Ok(atlas) => State::Ready(Box::new(AtlasView::new(atlas))),
             Err(reason) => {
                 log::error!("the Atlas could not load: {reason}");
                 State::Failed(reason)
@@ -185,12 +193,74 @@ impl AtlasTab {
                 None => {}
             }
             drive_camera(&mut view.scene.camera, ui, &response, rect);
+            let ray = |view: &AtlasView, pointer: egui::Pos2| {
+                let ndc_x = (pointer.x - rect.left()) / rect.width() * 2.0 - 1.0;
+                let ndc_y = 1.0 - (pointer.y - rect.top()) / rect.height() * 2.0;
+                view.scene.camera.ray(ndc_x, ndc_y, aspect)
+            };
+            // The name under the pointer, looked up again once it moves.
+            match response.hover_pos().filter(|_| !response.dragged()) {
+                Some(pointer) => {
+                    let now = ui.input(|i| i.time);
+                    let stale = self.hover.as_ref().is_none_or(|h| {
+                        h.pointer.distance(pointer) > 2.0 && now - h.time > HOVER_INTERVAL
+                    });
+                    if stale {
+                        let (origin, direction) = ray(view, pointer);
+                        self.hover = Some(Hover {
+                            pointer,
+                            time: now,
+                            index: view.pick(origin, direction),
+                        });
+                    }
+                    if let Some(index) = self.hover.as_ref().and_then(|h| h.index) {
+                        let structure = &view.atlas().structures()[index];
+                        let name = display_name(structure, tr);
+                        let latin = structure.latin.clone();
+                        response.clone().on_hover_ui_at_pointer(|ui| {
+                            ui.strong(name);
+                            if let Some(latin) = latin {
+                                ui.label(egui::RichText::new(latin).italics());
+                            }
+                        });
+                    }
+                }
+                None => self.hover = None,
+            }
+            if !ui.ctx().egui_wants_keyboard_input() {
+                let (f, h, i, escape) = ui.input(|input| {
+                    (
+                        input.key_pressed(egui::Key::F),
+                        input.key_pressed(egui::Key::H),
+                        input.key_pressed(egui::Key::I),
+                        input.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if f {
+                    self.frame_pending = Some(Framing::Selected);
+                }
+                if let Some(index) = view.selected() {
+                    if h {
+                        view.hide(index);
+                    }
+                    if i {
+                        view.isolate([index]);
+                        self.frame_pending = Some(Framing::Selected);
+                    }
+                }
+                if escape {
+                    if view.selected().is_some() {
+                        view.select(None);
+                    } else {
+                        view.show_all();
+                        self.frame_pending = Some(Framing::Shown);
+                    }
+                }
+            }
             if response.clicked()
                 && let Some(pointer) = response.interact_pointer_pos()
             {
-                let ndc_x = (pointer.x - rect.left()) / rect.width() * 2.0 - 1.0;
-                let ndc_y = 1.0 - (pointer.y - rect.top()) / rect.height() * 2.0;
-                let (origin, direction) = view.scene.camera.ray(ndc_x, ndc_y, aspect);
+                let (origin, direction) = ray(view, pointer);
                 let hit = view.pick(origin, direction);
                 view.select(hit);
             }
@@ -221,6 +291,28 @@ fn panel(
     search: &mut String,
 ) -> Option<Framing> {
     let mut framing = None;
+    view.emphasis = None;
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tr.tr("atlas-quick-muscles")).clicked() {
+            view.show_all();
+            view.set_layer(Layer::Bones, LayerState::SHOWN);
+            view.set_layer(Layer::Muscles, LayerState::SHOWN);
+            view.colors = AtlasColors::Masses;
+            framing = Some(Framing::Shown);
+        }
+        if ui.button(tr.tr("atlas-quick-skeleton")).clicked() {
+            view.show_all();
+            view.set_layer(Layer::Bones, LayerState::SHOWN);
+            view.set_layer(Layer::Muscles, LayerState::HIDDEN);
+            view.colors = AtlasColors::Natural;
+            framing = Some(Framing::Shown);
+        }
+        if ui.button(tr.tr("atlas-quick-skull")).clicked() {
+            view.isolate(view.skull());
+            view.colors = AtlasColors::Bones;
+            framing = Some(Framing::View(0));
+        }
+    });
     ui.add(
         egui::TextEdit::singleline(search)
             .hint_text(tr.tr("atlas-search"))
@@ -284,88 +376,105 @@ fn panel(
         framing = Some(Framing::Shown);
     }
 
-    ui.heading(tr.tr("atlas-skull"));
-    if ui.button(tr.tr("atlas-show-skull")).clicked() {
-        view.isolate(view.skull());
-        view.colors = AtlasColors::Bones;
-        framing = Some(Framing::View(0));
+    section(ui, tr, "atlas-views-title", true, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (index, preset) in CameraPreset::built_ins().iter().enumerate() {
+                let label = tr.tr(&format!("camera-preset-{}", preset.name()));
+                if ui.button(label).clicked() {
+                    framing = Some(Framing::View(index));
+                }
+            }
+            if ui.button(tr.tr("atlas-frame")).clicked() {
+                framing = Some(Framing::Shown);
+            }
+        });
+    });
+    if view.colors == AtlasColors::Masses {
+        section(ui, tr, "atlas-masses", true, |ui| {
+            legend(ui, tr, view, &mut framing)
+        });
     }
-    ui.label(tr.tr("atlas-views"));
-    ui.horizontal_wrapped(|ui| {
-        for (index, preset) in CameraPreset::built_ins().iter().enumerate() {
-            let label = tr.tr(&format!("camera-preset-{}", preset.name()));
-            if ui.button(label).clicked() {
-                framing = Some(Framing::View(index));
+    section(ui, tr, "atlas-layers", true, |ui| {
+        for layer in Layer::ALL {
+            let mut state = view.layer(layer);
+            let before = state;
+            ui.checkbox(&mut state.visible, tr.tr(layer_message_id(layer)));
+            if state.visible {
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    // Further right is more see-through.
+                    let mut see_through = 1.0 - state.opacity;
+                    ui.add(
+                        egui::Slider::new(&mut see_through, 0.0..=1.0 - LayerState::MIN_OPACITY)
+                            .show_value(false),
+                    );
+                    state.opacity = 1.0 - see_through;
+                    ui.label(tr.tr("atlas-opacity"));
+                });
+            }
+            if state != before {
+                view.set_layer(layer, state);
             }
         }
     });
-    ui.separator();
-
-    ui.heading(tr.tr("atlas-layers"));
-    for layer in Layer::ALL {
-        let mut state = view.layer(layer);
-        let before = state;
-        ui.checkbox(&mut state.visible, tr.tr(layer_message_id(layer)));
-        if state.visible {
-            ui.horizontal(|ui| {
-                ui.add_space(18.0);
-                // Further right is more see-through.
-                let mut see_through = 1.0 - state.opacity;
-                ui.add(
-                    egui::Slider::new(&mut see_through, 0.0..=1.0 - LayerState::MIN_OPACITY)
-                        .show_value(false),
-                );
-                state.opacity = 1.0 - see_through;
-                ui.label(tr.tr("atlas-opacity"));
-            });
-        }
-        if state != before {
-            view.set_layer(layer, state);
-        }
-    }
-    ui.separator();
-    ui.heading(tr.tr("atlas-look"));
-    let shading = &mut view.scene.shading;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut shading.mode, ShadingMode::Lit, tr.tr("shading-lit"));
-        ui.selectable_value(
-            &mut shading.mode,
-            ShadingMode::Solid,
-            tr.tr("shading-solid"),
-        );
-    });
-    ui.horizontal_wrapped(|ui| {
-        for (colors, id) in [
-            (AtlasColors::Masses, "atlas-color-masses"),
-            (AtlasColors::Bones, "atlas-color-bones"),
-            (AtlasColors::Natural, "atlas-color-natural"),
-            (AtlasColors::Clay, "color-clay"),
-        ] {
-            ui.selectable_value(&mut view.colors, colors, tr.tr(id));
+    section(ui, tr, "atlas-look", false, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (colors, id) in [
+                (AtlasColors::Masses, "atlas-color-masses"),
+                (AtlasColors::Bones, "atlas-color-bones"),
+                (AtlasColors::Natural, "atlas-color-natural"),
+                (AtlasColors::Clay, "color-clay"),
+            ] {
+                ui.selectable_value(&mut view.colors, colors, tr.tr(id));
+            }
+        });
+        ui.checkbox(&mut view.show_fibres, tr.tr("atlas-fibres"));
+        let shading = &mut view.scene.shading;
+        ui.checkbox(&mut shading.lines.contours, tr.tr("atlas-outlines"));
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut shading.mode,
+                ShadingMode::Solid,
+                tr.tr("atlas-light-even"),
+            );
+            ui.selectable_value(
+                &mut shading.mode,
+                ShadingMode::Lit,
+                tr.tr("atlas-light-shadows"),
+            );
+        });
+        if shading.mode == ShadingMode::Lit {
+            ui.checkbox(
+                &mut shading.ambient_occlusion.enabled,
+                tr.tr("studio-ambient-occlusion"),
+            );
         }
     });
-    let shading = &mut view.scene.shading;
-    ui.checkbox(
-        &mut shading.ambient_occlusion.enabled,
-        tr.tr("studio-ambient-occlusion"),
-    );
-    if ui.button(tr.tr("atlas-frame")).clicked() {
-        framing = Some(Framing::Shown);
-    }
-    if view.colors == AtlasColors::Masses {
-        ui.separator();
-        legend(ui, tr, view, &mut framing);
-    }
+    section(ui, tr, "atlas-structures", false, |ui| {
+        structure_list(ui, tr, view, &mut framing);
+    });
     ui.separator();
-    structure_list(ui, tr, view, &mut framing);
-    ui.separator();
+    ui.weak(tr.tr("atlas-keys"));
     ui.weak(tr.tr("atlas-credit"));
     framing
 }
 
+/// A collapsible part of the panel, open or closed at first.
+fn section(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    title: &str,
+    open: bool,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::CollapsingHeader::new(egui::RichText::new(tr.tr(title)).strong())
+        .id_salt(("atlas-section", title.to_owned()))
+        .default_open(open)
+        .show(ui, add_contents);
+}
+
 /// The masses with their colours; a click shows only that mass.
 fn legend(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView, framing: &mut Option<Framing>) {
-    ui.heading(tr.tr("atlas-masses"));
     ui.weak(tr.tr("atlas-masses-hint"));
     for mass in MASSES {
         ui.horizontal(|ui| {
@@ -373,7 +482,11 @@ fn legend(ui: &mut egui::Ui, tr: &Localizer, view: &mut AtlasView, framing: &mut
             let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, 3.0, egui::Color32::from_rgb(r, g, b));
-            if ui.link(tr.tr(&mass_message_id(mass))).clicked() {
+            let link = ui.link(tr.tr(&mass_message_id(mass)));
+            if link.hovered() {
+                view.emphasis = Some(mass);
+            }
+            if link.clicked() {
                 view.isolate(view.structures_of(mass));
                 *framing = Some(Framing::Shown);
             }
@@ -408,7 +521,6 @@ fn structure_list(
     view: &mut AtlasView,
     framing: &mut Option<Framing>,
 ) {
-    ui.heading(tr.tr("atlas-structures"));
     for layer in Layer::ALL {
         egui::CollapsingHeader::new(tr.tr(layer_message_id(layer)))
             .id_salt(("atlas-list", layer_message_id(layer)))

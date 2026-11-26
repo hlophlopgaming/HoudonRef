@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
+use houdon_core::atlas::Fibres;
 use houdon_core::{AtlasView, Light, Model, ModelId, Room, Scene, Shading, Surface};
 
 use crate::RenderQuality;
@@ -56,6 +57,8 @@ pub struct FrameObject {
     /// 1 for a solid object; less to see through it. See-through objects
     /// are drawn after the solid ones and leave no mark on the overlays.
     pub opacity: f32,
+    /// Fine lines along a muscle's fibres, drawn on its surface.
+    pub fibres: Option<Fibres>,
 }
 
 /// Everything the renderer needs for one picture. Cheap to build every
@@ -111,6 +114,7 @@ impl Frame {
                         one_sided: true,
                         casts_shadows: false,
                         opacity: 1.0,
+                        fibres: None,
                     }
                 });
         let objects = scene.objects().iter().filter_map(|object| {
@@ -127,6 +131,7 @@ impl Frame {
                 one_sided: false,
                 casts_shadows: true,
                 opacity: 1.0,
+                fibres: None,
             })
         });
         let view = scene.camera.view();
@@ -168,6 +173,7 @@ impl Frame {
                 // A see-through layer would darken what it shows.
                 casts_shadows: shown.opacity >= 1.0,
                 opacity: shown.opacity,
+                fibres: shown.fibres,
             }
         }));
         frame
