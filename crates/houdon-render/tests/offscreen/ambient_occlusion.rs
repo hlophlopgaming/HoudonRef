@@ -94,3 +94,59 @@ fn open_floor_has_no_speckles_with_multisampling() {
         .count();
     assert_eq!(speckles, 0, "open floor stays clean");
 }
+
+#[test]
+fn ambient_occlusion_leaves_no_grain_on_smooth_surfaces() {
+    // Each pixel turns its samples differently; left as it is, that drew a
+    // fine diagonal ripple wherever occlusion was partial.
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    const SIDE: u32 = 192;
+    let mut picture = |ambient_occlusion| {
+        let scene = box_on_the_floor(ambient_occlusion);
+        let image = renderer.render_with(
+            &Frame::from_scene(&scene, 1.0),
+            SIDE,
+            SIDE,
+            AntiAliasing::VIEWPORT,
+        );
+        (scene, image)
+    };
+    let (scene, plain) = picture(false);
+    let (_, occluded) = picture(true);
+    // The floor in front of the box, where occlusion fades out.
+    let near = |point: glam::Vec3| {
+        let (x, y) = pixel_of(&scene, point);
+        (x * SIDE / SIZE, y * SIDE / SIZE)
+    };
+    let (left, top) = near(glam::Vec3::new(-0.2, 0.0, 0.3));
+    let (right, bottom) = near(glam::Vec3::new(0.2, 0.0, 0.5));
+    let grain = |image: &Image| {
+        let at = |x, y| brightness(image.pixel(x, y)) as i32;
+        let (mut sum, mut count) = (0, 0);
+        for y in top.min(bottom)..top.max(bottom) {
+            for x in left..right {
+                let around = at(x + 1, y) + at(x - 1, y) + at(x, y + 1) + at(x, y - 1);
+                sum += (4 * at(x, y) - around).unsigned_abs();
+                count += 1;
+            }
+        }
+        assert!(count > 200, "{count} floor pixels");
+        sum as f32 / count as f32
+    };
+    let rows = top.min(bottom)..top.max(bottom);
+    let darkening = rows
+        .flat_map(|y| (left..right).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            brightness(plain.pixel(x, y)) as f32 - brightness(occluded.pixel(x, y)) as f32
+        })
+        .fold(0.0_f32, f32::max);
+    assert!(
+        darkening > 8.0,
+        "occlusion reaches the floor measured: {darkening}"
+    );
+    let (before, after) = (grain(&plain), grain(&occluded));
+    // A plain floor has none; the old per-pixel noise measured over 25.
+    assert!(after < before + 5.0, "grain {before:.2} -> {after:.2}");
+}

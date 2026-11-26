@@ -32,6 +32,9 @@ const MAX_SURFACE_DISTANCE: f32 = 200.0;
 // The surfaces as the camera sees them: normal and distance (see
 // FragmentOutput in shader.wgsl). Read texel by texel, never filtered.
 @group(0) @binding(3) var normals: texture_2d<f32>;
+// How much of each point's hemisphere is covered (see fs_occlusion), at the
+// size of the surfaces picture. Only the composite reads it.
+@group(1) @binding(0) var occlusion: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -135,16 +138,13 @@ fn picture_uv(p: vec3<f32>) -> vec2<f32> {
 
 // Ambient occlusion: how much of the hemisphere above a point other
 // surfaces cover, from the picture of distances and normals. Samples on a
-// spiral, turned per pixel so the few samples leave fine noise.
-fn ambient_occlusion(uv: vec2<f32>, pixel: vec2<f32>) -> f32 {
-    let strength = value.ambient_occlusion.x;
-    if strength <= 0.0 {
-        return 1.0;
-    }
+// spiral turned per pixel, the turns repeating every 4 x 4 pixels so that
+// `ambient_occlusion` can average the noise away over one such block.
+fn covered(uv: vec2<f32>, texel: vec2<i32>) -> f32 {
     let size = vec2<f32>(textureDimensions(normals));
-    let here = surface_at(vec2<i32>(uv * size));
+    let here = surface_at(texel);
     if here.z >= 0.999 {
-        return 1.0;
+        return 0.0;
     }
     let distance = here.z * MAX_SURFACE_DISTANCE;
     let n = vec3<f32>(here.xy, sqrt(max(1.0 - dot(here.xy, here.xy), 0.0)));
@@ -156,7 +156,10 @@ fn ambient_occlusion(uv: vec2<f32>, pixel: vec2<f32>) -> f32 {
     let p = view_point(uv, distance) + n * (0.004 * distance);
     let radius = value.ambient_occlusion.y;
     let count = u32(value.ambient_occlusion.z);
-    let turn = 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    // A 4 x 4 Bayer matrix: neighbouring pixels get far-apart turns.
+    var order = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let cell = (texel.x & 3) + 4 * (texel.y & 3);
+    let turn = 6.2831853 * (order[cell] + 0.5) / 16.0;
     var covered = 0.0;
     for (var i = 0u; i < count; i++) {
         let f = (f32(i) + 0.5) / f32(count);
@@ -177,7 +180,43 @@ fn ambient_occlusion(uv: vec2<f32>, pixel: vec2<f32>) -> f32 {
         let near = 1.0 - smoothstep(0.0, 1.0, abs(length(p) - seen) / radius - 1.0);
         covered += select(0.0, near, behind > 0.02 * radius + 0.006 * seen);
     }
-    return 1.0 - strength * covered / f32(max(count, 1u));
+    return covered / f32(max(count, 1u));
+}
+
+@fragment
+fn fs_occlusion(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(covered(in.uv, vec2<i32>(in.position.xy)), 0.0, 0.0, 1.0);
+}
+
+// The light ambient occlusion leaves: the cover averaged over the 4 x 4
+// block of pixels around, which holds every turn of the samples once,
+// leaving out pixels of another surface so edges stay sharp.
+fn ambient_occlusion(uv: vec2<f32>) -> f32 {
+    let strength = value.ambient_occlusion.x;
+    if strength <= 0.0 {
+        return 1.0;
+    }
+    let size = vec2<i32>(textureDimensions(occlusion));
+    let centre = vec2<i32>(uv * vec2<f32>(size));
+    let here = surface_at(centre);
+    if here.z >= 0.999 {
+        return 1.0;
+    }
+    var sum = 0.0;
+    var total = 0.0;
+    for (var y = -1; y <= 2; y++) {
+        for (var x = -1; x <= 2; x++) {
+            let texel = clamp(centre + vec2<i32>(x, y), vec2<i32>(0), size - 1);
+            let there = surface_at(texel);
+            let same = abs(there.z - here.z) <= here.z * 0.02 + 1e-4
+                && dot(there.xy - here.xy, there.xy - here.xy) < 0.04;
+            if same {
+                sum += textureLoad(occlusion, texel, 0).r;
+                total += 1.0;
+            }
+        }
+    }
+    return 1.0 - strength * sum / max(total, 1.0);
 }
 
 @fragment
@@ -196,7 +235,7 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     // Lightness on encoded (perceptual) values, as an artist judges it.
     let encoded = encode(
-        colour / total * screen_cavity(in.uv) * ambient_occlusion(in.uv, in.position.xy),
+        colour / total * screen_cavity(in.uv) * ambient_occlusion(in.uv),
     );
     let lightness = dot(encoded, vec3<f32>(0.2126, 0.7152, 0.0722));
     var result = encoded;
