@@ -290,7 +290,13 @@ impl eframe::App for HoudonApp {
 
         match self.section {
             Section::Studio => self.studio.ui(ui, &self.localizer, self.presentation),
-            Section::Atlas => self.atlas.ui(ui, &self.localizer),
+            Section::Atlas => {
+                self.atlas.ui(ui, &self.localizer);
+                if let Some((name, glb)) = self.atlas.take_studio_request() {
+                    self.studio.open_model(&name, glb, &self.localizer);
+                    self.section = Section::Studio;
+                }
+            }
             Section::Atelier => coming_soon(ui, &self.localizer.tr("atelier-coming")),
         }
         if self.settings_open {

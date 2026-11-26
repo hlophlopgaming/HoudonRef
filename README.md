@@ -4,7 +4,7 @@
 
 <p align="center">Open-source tool for artists: an anatomy atlas, a 3D reference studio and a timed drawing atelier.</p>
 
-> Status: early development. The Studio can show a glTF model under adjustable light; Atlas and Atelier are not started. See the [roadmap](docs/ROADMAP.md).
+> Status: early development. The Studio sets up models, lights, rooms and shading to draw from; the Atlas shows the human écorché and skull, coloured by sculptural masses; the Atelier is not started. See the [roadmap](docs/ROADMAP.md).
 
 Code licence: [GPL-3.0](LICENSE). Logo and third-party content keep their own licences (see Credits).
 

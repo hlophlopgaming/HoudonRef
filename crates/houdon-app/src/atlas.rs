@@ -59,6 +59,8 @@ pub struct AtlasTab {
     /// proportions.
     frame_pending: Option<Framing>,
     search: String,
+    /// A model to open in the Studio: its name and binary glTF.
+    to_studio: Option<(String, Vec<u8>)>,
 }
 
 /// What to point the camera at.
@@ -79,6 +81,7 @@ impl Default for AtlasTab {
             view_size: [1, 1],
             frame_pending: Some(Framing::Shown),
             search: String::new(),
+            to_studio: None,
         }
     }
 }
@@ -88,6 +91,12 @@ impl AtlasTab {
     pub fn apply_settings(&mut self, anti_aliasing: AntiAliasing, quality: RenderQuality) {
         self.anti_aliasing = anti_aliasing;
         self.quality = quality;
+    }
+
+    /// What the artist asked to open in the Studio since last asked: a
+    /// model's name and its binary glTF.
+    pub fn take_studio_request(&mut self) -> Option<(String, Vec<u8>)> {
+        self.to_studio.take()
     }
 
     /// Whether the pack has been asked for (for tests: never at start).
@@ -144,6 +153,14 @@ impl AtlasTab {
             .max_size(340.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    if ui
+                        .button(tr.tr("atlas-open-in-studio"))
+                        .on_hover_text(tr.tr("atlas-open-in-studio-hint"))
+                        .clicked()
+                    {
+                        self.to_studio = studio_model(view, tr);
+                    }
+                    ui.separator();
                     if let Some(framing) = panel(ui, tr, view, &mut self.search) {
                         self.frame_pending = Some(framing);
                     }
@@ -422,6 +439,24 @@ fn structure_list(
                 }
             });
     }
+}
+
+/// The selection, or what is shown, as a model for the Studio, named for
+/// what it is.
+fn studio_model(view: &AtlasView, tr: &Localizer) -> Option<(String, Vec<u8>)> {
+    let what = match view.selected() {
+        Some(index) => display_name(&view.atlas().structures()[index], tr),
+        None if view.is_isolating() && view.shown().count() == view.skull().len() => {
+            tr.tr("atlas-model-skull")
+        }
+        None => tr.tr("atlas-model-shown"),
+    };
+    let name = tr.tr_args("atlas-model-name", &[("what", what.into())]);
+    let model = view.to_model(&name)?;
+    Some((
+        name,
+        houdon_core::atlas::to_glb(&model, houdon_core::atlas::ATTRIBUTION),
+    ))
 }
 
 /// A structure's name in the interface's language, with its side. Russian

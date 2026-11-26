@@ -704,4 +704,63 @@ mod tests {
         assert!(studio.message.is_none(), "{:?}", studio.message);
         assert_eq!(only_model(&studio).textures.len(), 1);
     }
+
+    #[test]
+    fn a_model_from_the_atlas_keeps_its_size_colours_and_attribution_in_a_scene_file() {
+        use houdon_core::atlas::{ATTRIBUTION, to_glb};
+        use houdon_core::{Material, MeshPart};
+        // A small stand-in for a model the Atlas hands over.
+        let mut model = Model::from_mesh(
+            "Atlas: skull",
+            vec![
+                glam::Vec3::ZERO,
+                glam::Vec3::new(0.15, 0.0, 0.0),
+                glam::Vec3::new(0.0, 0.2, 0.1),
+            ],
+            vec![0, 1, 2],
+        );
+        model.parts = vec![MeshPart {
+            first_index: 0,
+            index_count: 3,
+            material: Some(0),
+        }];
+        model.materials = vec![Material {
+            name: "bone".into(),
+            base_color: glam::Vec4::new(0.8, 0.5, 0.2, 1.0),
+            base_color_texture: None,
+            metallic: 0.0,
+            roughness: 0.7,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            normal_scale: 1.0,
+        }];
+        let tr = Localizer::new(Language::English);
+        let mut studio = Studio::new();
+        studio.open_model("Atlas: skull", to_glb(&model, ATTRIBUTION), &tr);
+        assert!(studio.message.is_none(), "{:?}", studio.message);
+        let added = only_model(&studio);
+        assert!(added.has_materials());
+        let object = studio.scene.objects().last().unwrap();
+        let size = studio
+            .scene
+            .object_matrix(object)
+            .transform_vector3(added.bounds.size());
+        assert!((size.y - 0.2).abs() < 1e-4, "real size: {size}");
+
+        let saved = studio
+            .scene
+            .to_ron(|id| studio.sources.get(&id).map(|asset| asset.source(false)))
+            .unwrap();
+        let mut attributed = false;
+        Scene::from_ron(saved.as_bytes(), |name, source| {
+            if let ModelSource::Embedded { bytes, .. } = &source {
+                attributed |= String::from_utf8_lossy(bytes).contains("Z-Anatomy");
+            }
+            let asset = ModelAsset::resolve(source, None)?;
+            let model = asset.load(name).map_err(|e| e.to_string())?;
+            Ok((model, asset))
+        })
+        .unwrap();
+        assert!(attributed, "the attribution travels inside the scene file");
+    }
 }

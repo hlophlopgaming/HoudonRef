@@ -59,6 +59,12 @@ impl Studio {
         }
     }
 
+    /// Adds an object of a model given as glTF or OBJ bytes, as the Atlas
+    /// hands over what it shows.
+    pub fn open_model(&mut self, name: &str, bytes: Vec<u8>, tr: &Localizer) {
+        self.load_model_file(name, None, bytes, &[], tr);
+    }
+
     /// Takes files dropped onto the window and files whose bytes have arrived.
     pub fn poll_file_loads(&mut self, ctx: &egui::Context, tr: &Localizer) -> Option<f32> {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());

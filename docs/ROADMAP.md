@@ -60,14 +60,14 @@ Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms,
 
 ## Stage 2: Atlas
 
-The Atlas comes before the Atelier. Stage 1 of the Atlas is specified in issue #39 and split into tickets #40 to #46.
+The Atlas comes before the Atelier. Stage 1 of the Atlas is specified in issue #39 and split into tickets #40 to #46. It is complete.
 
-- [ ] Human content pack from Z-Anatomy (skeleton, muscles, joints; CC BY-SA 4.0), kept separate from the code and loaded when the Atlas opens (#40).
-- [ ] Layers, see-through muscles (#41); picking, names in English or Russian with Latin, search, isolate and hide (#42).
-- [ ] Muscles coloured by sculptural masses, with a legend (#43).
-- [ ] Russian names, marked for review (#44).
-- [ ] The skull bone by bone, with classic views (#45).
-- [ ] Open what the Atlas shows in the Studio (#46).
+- [x] Human content pack from Z-Anatomy (skeleton, muscles, joints; CC BY-SA 4.0), kept separate from the code and loaded when the Atlas opens (#40); carried in the desktop app, fetched on the web.
+- [x] Layers, see-through muscles (#41); picking, names in English or Russian with Latin, search, isolate and hide (#42).
+- [x] Muscles coloured by sculptural masses, with a legend (#43).
+- [x] Russian names, marked for review (#44).
+- [x] The skull bone by bone, with classic views (#45).
+- [x] Open what the Atlas shows in the Studio (#46).
 
 Next Atlas stages: posing with a skeleton rig and muscles that thicken as they shorten and thin as they lengthen; dog and horse once open écorché models are found (open skeletons exist).
 

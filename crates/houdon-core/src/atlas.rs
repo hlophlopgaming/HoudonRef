@@ -9,8 +9,11 @@ use serde::Deserialize;
 
 use crate::Model;
 
+mod export;
 mod masses;
 mod view;
+
+pub use export::{ATTRIBUTION, to_glb};
 
 pub use masses::{DEEP_MUSCLE_SRGB, MASSES, Mass, NEIGHBOURS, mass_of};
 pub use view::{AtlasColors, AtlasView, Layer, LayerState, SKULL, ShownStructure, StructureIndex};
