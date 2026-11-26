@@ -57,6 +57,37 @@ impl Studio {
                 });
             }
         }
+        if shading.mode == ShadingMode::Lit {
+            let ao = &mut shading.ambient_occlusion;
+            ui.checkbox(&mut ao.enabled, tr.tr("studio-ambient-occlusion"))
+                .on_hover_text(tr.tr("ambient-occlusion-hint"));
+            if ao.enabled {
+                ui.indent("ambient-occlusion", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut ao.strength, 0.0..=1.0)
+                            .text(tr.tr("ambient-occlusion-strength")),
+                    );
+                    ui.horizontal(|ui| {
+                        length_field(
+                            ui,
+                            tr,
+                            self.units,
+                            &mut ao.radius,
+                            0.01..=AmbientOcclusion::MAX_RADIUS,
+                        );
+                        ui.label(tr.tr("ambient-occlusion-radius"));
+                    });
+                    ui.add(
+                        egui::Slider::new(
+                            &mut ao.samples,
+                            AmbientOcclusion::MIN_SAMPLES..=AmbientOcclusion::MAX_SAMPLES,
+                        )
+                        .text(tr.tr("ambient-occlusion-samples")),
+                    )
+                    .on_hover_text(tr.tr("ambient-occlusion-samples-hint"));
+                });
+            }
+        }
         ui.separator();
         cavity_controls(ui, tr, &mut shading.cavity);
         line_controls(ui, tr, &mut shading.lines);

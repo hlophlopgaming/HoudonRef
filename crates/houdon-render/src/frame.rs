@@ -74,6 +74,10 @@ pub struct Frame {
     /// The camera's right and up directions, for the Solid mode's light.
     pub camera_right: Vec3,
     pub camera_up: Vec3,
+    /// The tangent of half the vertical field of view, and the picture's
+    /// width over its height: to turn pixels back into points in space.
+    pub tan_half_fov: f32,
+    pub aspect: f32,
 }
 
 impl Frame {
@@ -132,6 +136,8 @@ impl Frame {
             shading: scene.shading.clone(),
             camera_right: view.row(0).truncate(),
             camera_up: view.row(1).truncate(),
+            tan_half_fov: (scene.camera.vertical_fov() * 0.5).tan(),
+            aspect,
         }
     }
 

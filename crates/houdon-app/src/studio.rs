@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use houdon_core::Transform;
 use houdon_core::{
-    BuiltinRoom, CameraPreset, CameraTarget, Cavity, ColorSource, DEFAULT_PATTERN_SIZE, LengthUnit,
-    Light, LightId, LightKind, LightMask, Lines, LoadError, MAX_LIGHTS, MaskImage, Matcap,
-    MatcapImage, ModelId, OrbitCamera, PLAUSIBLE_SIZE, RoomPreset, Scene, ShadingMode,
-    SolidLighting, UnitSystem, ValueMode,
+    AmbientOcclusion, BuiltinRoom, CameraPreset, CameraTarget, Cavity, ColorSource,
+    DEFAULT_PATTERN_SIZE, LengthUnit, Light, LightId, LightKind, LightMask, Lines, LoadError,
+    MAX_LIGHTS, MaskImage, Matcap, MatcapImage, ModelId, OrbitCamera, PLAUSIBLE_SIZE, RoomPreset,
+    Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
 use houdon_render::{AntiAliasing, Frame, ViewportCallback};

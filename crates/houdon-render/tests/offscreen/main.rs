@@ -73,6 +73,7 @@ pub(crate) fn background_pixels(image: &Image, background: [u8; 3]) -> usize {
         .count()
 }
 
+mod ambient_occlusion;
 mod anti_aliasing;
 mod lights;
 mod masks;

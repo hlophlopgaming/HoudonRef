@@ -237,6 +237,8 @@ impl SceneFile {
         let lines = &shading.lines;
         if !shading.clay_color.is_finite() || !lines.color.is_finite() || !lines.wireframe_color.is_finite()
             || ![cavity.geometry_ridge, cavity.geometry_hollow, cavity.screen_ridge, cavity.screen_hollow, lines.thickness, lines.fold_sensitivity, lines.wireframe_opacity, shading.value.balance, shading.value.squint].into_iter().all(f32::is_finite)
+            || !shading.ambient_occlusion.strength.is_finite()
+            || !shading.ambient_occlusion.radius.is_finite()
             || [shading.value.mode, shading.value.last_mode].into_iter().any(|mode| matches!(mode, ValueMode::Tones(n) if !(ValueMode::MIN_TONES..=ValueMode::MAX_TONES).contains(&n)))
             || shading.matcap.as_ref().is_some_and(|matcap| {
                 let image = &matcap.image;

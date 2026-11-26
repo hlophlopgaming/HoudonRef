@@ -238,3 +238,10 @@ preset-load-error = Could not read the saved presets: { $reason }
 preset-save-error = Could not save the preset: { $reason }
 preset-import-error = Could not import the preset: { $reason }
 preset-export-error = Could not export the preset: { $reason }
+
+studio-ambient-occlusion = Ambient occlusion
+ambient-occlusion-hint = Darkens corners, contacts, folds and hollows, where the room's light reaches less. Lit mode only.
+ambient-occlusion-strength = Strength
+ambient-occlusion-radius = Radius
+ambient-occlusion-samples = Quality
+ambient-occlusion-samples-hint = Samples per pixel: more is smoother and slower.

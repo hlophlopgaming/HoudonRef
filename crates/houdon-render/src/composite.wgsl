@@ -15,7 +15,16 @@ struct Value {
     lines: vec4<f32>,
     // rgb: line colour, linear.
     line_color: vec4<f32>,
+    // Ambient occlusion: x strength (0 when off), y radius in metres,
+    // z samples.
+    ambient_occlusion: vec4<f32>,
+    // x: tangent of half the vertical field of view; y: width over height.
+    lens: vec4<f32>,
 };
+
+// The distance the surfaces picture's distances are relative to, metres
+// (MAX_SURFACE_DISTANCE in shader.wgsl).
+const MAX_SURFACE_DISTANCE: f32 = 200.0;
 
 @group(0) @binding(0) var picture: texture_2d<f32>;
 @group(0) @binding(1) var picture_sampler: sampler;
@@ -109,6 +118,68 @@ fn contour(uv: vec2<f32>) -> f32 {
     return select(0.0, 1.0, turn > value.lines.y);
 }
 
+// The point of the camera's space seen at `uv`, `distance` metres away:
+// x right, y up, the camera looking along -z.
+fn view_point(uv: vec2<f32>, distance: f32) -> vec3<f32> {
+    let t = value.lens.x;
+    let ray = vec3<f32>((uv.x * 2.0 - 1.0) * t * value.lens.y, (1.0 - uv.y * 2.0) * t, -1.0);
+    return normalize(ray) * distance;
+}
+
+// Where a point of the camera's space shows in the picture.
+fn picture_uv(p: vec3<f32>) -> vec2<f32> {
+    let t = value.lens.x;
+    let ndc = p.xy / (max(-p.z, 1e-4) * vec2<f32>(t * value.lens.y, t));
+    return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+// Ambient occlusion: how much of the hemisphere above a point other
+// surfaces cover, from the picture of distances and normals. Samples on a
+// spiral, turned per pixel so the few samples leave fine noise.
+fn ambient_occlusion(uv: vec2<f32>, pixel: vec2<f32>) -> f32 {
+    let strength = value.ambient_occlusion.x;
+    if strength <= 0.0 {
+        return 1.0;
+    }
+    let size = vec2<f32>(textureDimensions(normals));
+    let here = surface_at(vec2<i32>(uv * size));
+    if here.z >= 0.999 {
+        return 1.0;
+    }
+    let distance = here.z * MAX_SURFACE_DISTANCE;
+    let n = vec3<f32>(here.xy, sqrt(max(1.0 - dot(here.xy, here.xy), 0.0)));
+    let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9);
+    let tangent = normalize(cross(helper, n));
+    let bitangent = cross(n, tangent);
+    // Start a little off the surface: a pixel of surface seen at a grazing
+    // angle spans a range of distances, which must not count as cover.
+    let p = view_point(uv, distance) + n * (0.004 * distance);
+    let radius = value.ambient_occlusion.y;
+    let count = u32(value.ambient_occlusion.z);
+    let turn = 6.2831853 * fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    var covered = 0.0;
+    for (var i = 0u; i < count; i++) {
+        let f = (f32(i) + 0.5) / f32(count);
+        let a = f32(i) * 2.39996323 + turn;
+        // Cosine-weighted directions, nearer samples more often, none
+        // almost along the surface.
+        let r = sqrt(f) * 0.9;
+        let direction = tangent * (cos(a) * r) + bitangent * (sin(a) * r) + n * sqrt(1.0 - r * r);
+        let sample = p + direction * radius * mix(0.15, 1.0, f * f);
+        let at = picture_uv(sample);
+        if any(at < vec2<f32>(0.0)) || any(at > vec2<f32>(1.0)) {
+            continue;
+        }
+        let seen = surface_at(vec2<i32>(at * size)).z * MAX_SURFACE_DISTANCE;
+        let behind = length(sample) - seen;
+        // Covered when a surface stands in front of the sample, but not one
+        // far in front of the point: that is another object, not a corner.
+        let near = 1.0 - smoothstep(0.0, 1.0, abs(length(p) - seen) / radius - 1.0);
+        covered += select(0.0, near, behind > 0.02 * radius + 0.006 * seen);
+    }
+    return 1.0 - strength * covered / f32(max(count, 1u));
+}
+
 @fragment
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     // Squint: a Gaussian blur on a 5 x 5 grid scaled by the radius.
@@ -124,7 +195,9 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     // Lightness on encoded (perceptual) values, as an artist judges it.
-    let encoded = encode(colour / total * screen_cavity(in.uv));
+    let encoded = encode(
+        colour / total * screen_cavity(in.uv) * ambient_occlusion(in.uv, in.position.xy),
+    );
     let lightness = dot(encoded, vec3<f32>(0.2126, 0.7152, 0.0722));
     var result = encoded;
     let mode = value.params.x;

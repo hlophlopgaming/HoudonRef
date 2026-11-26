@@ -242,3 +242,10 @@ preset-load-error = Не удалось прочитать сохранённы�
 preset-save-error = Не удалось сохранить пресет: { $reason }
 preset-import-error = Не удалось импортировать пресет: { $reason }
 preset-export-error = Не удалось экспортировать пресет: { $reason }
+
+studio-ambient-occlusion = Затенение в углах (AO)
+ambient-occlusion-hint = Затемняет углы, места касания, складки и впадины, куда меньше попадает свет окружения. Только в режиме Lit.
+ambient-occlusion-strength = Сила
+ambient-occlusion-radius = Радиус
+ambient-occlusion-samples = Качество
+ambient-occlusion-samples-hint = Выборок на пиксель: больше — глаже, но медленнее.

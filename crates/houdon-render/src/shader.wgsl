@@ -341,30 +341,15 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
 }
 
-// The colour, and for the screen-space cavity the surface as the camera
-// sees it: rg the normal's x (right) and y (up) from -1..1 to 0..1; ba the
-// distance from the eye over MAX_SURFACE_DISTANCE in two 8-bit halves.
-// Where nothing was drawn it stays cleared to the farthest distance.
+// The surfaces pass (fs_surface) draws, for the screen-space overlays, each
+// surface as the camera sees it: rg the normal's x (right) and y (up) from
+// -1..1 to 0..1; ba the distance from the eye over MAX_SURFACE_DISTANCE in
+// two 8-bit halves. It is never multisampled: averaging the halves would
+// break them. Where nothing was drawn it stays cleared to the farthest.
 const MAX_SURFACE_DISTANCE: f32 = 200.0;
 
-struct FragmentOutput {
-    @location(0) color: vec4<f32>,
-    @location(1) normal: vec4<f32>,
-};
-
-fn shaded(color: vec3<f32>, n: vec3<f32>, world: vec3<f32>) -> FragmentOutput {
-    var out: FragmentOutput;
-    out.color = vec4<f32>(color, 1.0);
-    let facing = vec2<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz));
-    let distance = clamp(length(u.eye.xyz - world) / MAX_SURFACE_DISTANCE, 0.0, 0.999);
-    let high = floor(distance * 255.0) / 255.0;
-    let low = fract(distance * 255.0);
-    out.normal = vec4<f32>(facing * 0.5 + 0.5, high, low);
-    return out;
-}
-
 @fragment
-fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> FragmentOutput {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     var n = normalize(in.normal);
     if !front_facing {
         n = -n;
@@ -395,7 +380,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
         if u.params.y == 1u {
             solid = pow(solid, vec3<f32>(1.0 / 2.2));
         }
-        return shaded(solid, n, in.world_position);
+        return vec4<f32>(solid, 1.0);
     }
 
     var direct = vec3<f32>(0.0);
@@ -444,7 +429,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> Fragm
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
-    return shaded(color, n, in.world_position);
+    return vec4<f32>(color, 1.0);
 }
 
 // The wireframe: each mesh edge as a line, pulled a little towards the eye
@@ -463,4 +448,19 @@ fn fs_wire() -> @location(0) vec4<f32> {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
     return vec4<f32>(color, u.wire.a);
+}
+
+// The surfaces pass: normal and distance as the camera sees them (see
+// MAX_SURFACE_DISTANCE). The mesh's own normal, without normal maps.
+@fragment
+fn fs_surface(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    var n = normalize(in.normal);
+    if !front_facing {
+        n = -n;
+    }
+    let facing = vec2<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz));
+    let distance = clamp(length(u.eye.xyz - in.world_position) / MAX_SURFACE_DISTANCE, 0.0, 0.999);
+    let high = floor(distance * 255.0) / 255.0;
+    let low = fract(distance * 255.0);
+    return vec4<f32>(facing * 0.5 + 0.5, high, low);
 }
