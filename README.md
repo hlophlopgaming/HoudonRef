@@ -47,12 +47,19 @@ Tests:
 cargo test --workspace
 ```
 
+## Opening models
+
+Use **Add → Open a model file…** or drop a `.glb`, `.gltf` or `.obj` file onto the
+Studio. An OBJ's `.mtl` materials and textures are read from beside it on
+the desktop; in the browser, pick or drop them together with the `.obj`.
+An OBJ without them opens in Clay, with a note naming the missing files.
+
 ## Saving Studio scenes
 
 In the Studio toolbar, use **Scene → Save scene** and **Scene → Open scene**,
 or drop a `.ron` file onto the window to open it. Desktop saves normally reference the original model
 paths. Enable **Embed models in scene file** to share the scene without
-those files. Browser downloads always embed the models. A missing model
+those files. Browser downloads always embed the models, OBJ materials and textures included. A missing model
 is reported when opening a scene, and the remaining objects still load.
 
 ## Reusing Studio lights

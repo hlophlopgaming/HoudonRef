@@ -29,7 +29,7 @@ studio-camera-hint =
     Delete: remove the selected object
     V: value study on and off
     P: presentation, only the view (P or Esc to leave)
-studio-drop-hint = Drop a .glb or .gltf file onto the window to add it.
+studio-drop-hint = Drop a .glb, .gltf or .obj file onto the window to add it (an .obj together with its .mtl and textures).
 
 studio-camera = Camera
 studio-focal-length = Focal length
@@ -39,7 +39,8 @@ studio-light-elevation = Height
 studio-light-intensity = Intensity
 
 error-blend-file = .blend files cannot be opened directly yet. In Blender, use File → Export → glTF 2.0 (.glb) and open that file.
-error-unsupported-file = Unsupported file type: { $name }. Drop a model (.glb or .gltf), an image, or a scene (.ron).
+error-unsupported-file = Unsupported file type: { $name }. Drop a model (.glb, .gltf or .obj), an image, or a scene (.ron).
+obj-files-missing = Opened { $name } without { $files }. Parts without their material are shown in Clay. Open the .obj together with its .mtl and texture files to see its materials.
 error-load-failed = Could not open { $name }: { $reason }
 error-read-failed = Could not read { $name }.
 scene-open = Open scene
@@ -211,7 +212,7 @@ model-file-type = 3D models
 image-file-type = Images
 studio-display = Display
 studio-no-objects = No objects yet: use Add in the toolbar.
-studio-empty-viewport = Add a model: the Add menu above, or drop a .glb or .gltf file here.
+studio-empty-viewport = Add a model: the Add menu above, or drop a .glb, .gltf or .obj file here.
 studio-add-light-menu = + Add light
 shading-solid-hint = A fixed light for reading form; the scene's lights are ignored.
 shading-lit-hint = The scene's lights, shadows and room.

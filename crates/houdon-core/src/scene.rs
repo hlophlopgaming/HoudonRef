@@ -16,7 +16,7 @@ use crate::shading::{ColorSource, Shading, Surface, random_color};
 use crate::{Bounds, Model, OrbitCamera};
 
 mod file;
-pub use file::{LoadedScene, ModelSource, SceneFileError};
+pub use file::{EmbeddedFile, LoadedScene, ModelSource, SceneFileError};
 
 /// Identifies a model. Ids are unique for the whole run of the app, so the
 /// renderer can cache GPU data by id across scenes.

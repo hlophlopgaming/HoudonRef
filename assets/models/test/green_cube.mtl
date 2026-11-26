@@ -1,0 +1,4 @@
+# The material of green_cube.obj.
+newmtl Green
+Kd 0.1 0.8 0.1
+Ns 50

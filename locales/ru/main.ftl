@@ -29,7 +29,7 @@ studio-camera-hint =
     Delete: удалить выделенный объект
     V: включить и выключить тональный разбор
     P: презентация, только вид (P или Esc — выйти)
-studio-drop-hint = Перетащите файл .glb или .gltf в окно, чтобы добавить его.
+studio-drop-hint = Перетащите файл .glb, .gltf или .obj в окно, чтобы добавить его (.obj — вместе с его .mtl и текстурами).
 
 studio-camera = Камера
 studio-focal-length = Фокусное расстояние
@@ -39,7 +39,8 @@ studio-light-elevation = Высота
 studio-light-intensity = Яркость
 
 error-blend-file = Файлы .blend пока нельзя открыть напрямую. В Blender выберите File → Export → glTF 2.0 (.glb) и откройте получившийся файл.
-error-unsupported-file = Неподдерживаемый тип файла: { $name }. Перетащите модель (.glb или .gltf), изображение или сцену (.ron).
+error-unsupported-file = Неподдерживаемый тип файла: { $name }. Перетащите модель (.glb, .gltf или .obj), изображение или сцену (.ron).
+obj-files-missing = { $name } открыт без файлов: { $files }. Части без своего материала показаны в Clay. Откройте .obj вместе с его .mtl и текстурами, чтобы увидеть материалы.
 error-load-failed = Не удалось открыть { $name }: { $reason }
 error-read-failed = Не удалось прочитать { $name }.
 scene-open = Открыть сцену
@@ -215,7 +216,7 @@ model-file-type = 3D-модели
 image-file-type = Изображения
 studio-display = Отображение
 studio-no-objects = Объектов пока нет: добавьте их через «Добавить» на панели над окном.
-studio-empty-viewport = Добавьте модель: меню «Добавить» сверху или перетащите сюда файл .glb или .gltf.
+studio-empty-viewport = Добавьте модель: меню «Добавить» сверху или перетащите сюда файл .glb, .gltf или .obj.
 studio-add-light-menu = + Добавить свет
 shading-solid-hint = Постоянный свет, чтобы читать форму; свет сцены не учитывается.
 shading-lit-hint = Свет сцены, тени и окружение.
