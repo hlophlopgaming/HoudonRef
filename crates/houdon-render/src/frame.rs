@@ -5,6 +5,8 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use houdon_core::{Light, Model, ModelId, Room, Scene, Shading, Surface};
 
+use crate::RenderQuality;
+
 /// The surface colour of an object, linear RGB. It changes with height
 /// from `below` to `above` between `from_y` and `to_y` (world space); the
 /// room uses this to sweep from floor to backdrop colour.
@@ -78,6 +80,8 @@ pub struct Frame {
     /// width over its height: to turn pixels back into points in space.
     pub tan_half_fov: f32,
     pub aspect: f32,
+    /// How much the renderer may spend on shadows and ambient occlusion.
+    pub quality: RenderQuality,
 }
 
 impl Frame {
@@ -138,6 +142,7 @@ impl Frame {
             camera_up: view.row(1).truncate(),
             tan_half_fov: (scene.camera.vertical_fov() * 0.5).tan(),
             aspect,
+            quality: RenderQuality::default(),
         }
     }
 

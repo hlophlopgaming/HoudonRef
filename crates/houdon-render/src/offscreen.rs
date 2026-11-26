@@ -115,6 +115,11 @@ impl OffscreenRenderer {
         }
     }
 
+    /// The side of the shadow atlas the last picture used, texels.
+    pub fn shadow_atlas_size(&self) -> u32 {
+        self.renderer.shadow_atlas_size()
+    }
+
     /// How many times the shadow maps were redrawn so far.
     pub fn shadow_map_builds(&self) -> u64 {
         self.renderer.shadow_map_builds()

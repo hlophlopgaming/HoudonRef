@@ -296,6 +296,11 @@ impl SceneRenderer {
         }
     }
 
+    /// The side of the shadow atlas in texels.
+    pub fn shadow_atlas_size(&self) -> u32 {
+        self.shadows.atlas_size()
+    }
+
     /// How many times the shadow maps were redrawn so far.
     pub fn shadow_map_builds(&self) -> u64 {
         self.shadows.builds
@@ -313,6 +318,8 @@ impl SceneRenderer {
         size: [u32; 2],
         anti_aliasing: AntiAliasing,
     ) {
+        self.shadows
+            .set_atlas_size(device, frame.quality.shadow_atlas_size);
         self.sync_meshes(device, frame);
         self.prepare_draw_list(device, queue, frame);
         let shadow_layout = ShadowLayout::new(frame);

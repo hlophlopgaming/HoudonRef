@@ -81,6 +81,7 @@ mod masks;
 mod materials;
 mod objects;
 mod overlays;
+mod quality;
 mod room;
 mod shadows;
 mod soft_shadows;

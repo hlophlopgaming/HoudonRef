@@ -12,7 +12,7 @@ use houdon_core::{
     Scene, ShadingMode, SolidLighting, UnitSystem, ValueMode,
 };
 use houdon_i18n::Localizer;
-use houdon_render::{AntiAliasing, Frame, ViewportCallback};
+use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
 use crate::masks::{self, MaskLibrary};
 use crate::matcaps::{self, MatcapLibrary};
@@ -61,6 +61,8 @@ pub struct Studio {
     units: UnitSystem,
     /// How the viewport smooths edges; an app setting.
     anti_aliasing: AntiAliasing,
+    /// What rendering may spend on shadows and ambient occlusion.
+    quality: RenderQuality,
     /// Light mask images and the picker's state.
     masks: MaskLibrary,
     mask_picker_open: bool,
@@ -95,6 +97,7 @@ impl Studio {
             incoming: Arc::default(),
             units: UnitSystem::default(),
             anti_aliasing: AntiAliasing::VIEWPORT,
+            quality: RenderQuality::default(),
             masks: MaskLibrary::default(),
             mask_picker_open: false,
             mask_category: masks::Category::Windows,
@@ -167,8 +170,15 @@ impl Studio {
     }
 
     /// Applies the app settings that affect the Studio.
-    pub fn apply_settings(&mut self, units: UnitSystem, figure_height: f32, smooth_edges: bool) {
+    pub fn apply_settings(
+        &mut self,
+        units: UnitSystem,
+        figure_height: f32,
+        smooth_edges: bool,
+        quality: RenderQuality,
+    ) {
         self.units = units;
+        self.quality = quality;
         self.anti_aliasing = if smooth_edges {
             AntiAliasing::VIEWPORT
         } else {
