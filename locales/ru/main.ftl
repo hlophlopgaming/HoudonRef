@@ -6,7 +6,18 @@ section-studio = Студия
 section-atelier = Ателье
 language = Язык
 
-atlas-coming = Анатомический атлас в работе: экорше по слоям, от кожи до скелета, с названиями на английском, русском и латыни.
+atlas-loading = Загрузка анатомии…
+atlas-load-failed = Не удалось загрузить анатомию: { $reason }
+atlas-layers = Слои
+atlas-layer-bones = Кости
+atlas-layer-muscles = Мышцы
+atlas-layer-fasciae = Фасции и сумки
+atlas-layer-joints = Связки и суставы
+atlas-opacity = Прозрачность
+atlas-look = Вид
+atlas-color-natural = Естественный
+atlas-frame = Показать тело целиком
+atlas-credit = Анатомия: Z-Anatomy (CC BY-SA 4.0), на основе BodyParts3D (CC BY 4.0).
 atelier-coming = Ателье для рисования в работе: сессии на время, от шара Лумиса через плоскости к детальной голове, со сменой ракурса и света.
 
 model-stats = Треугольников: { $triangles }

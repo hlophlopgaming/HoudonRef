@@ -43,6 +43,15 @@ impl Bounds {
         self.min.cmpgt(self.max).any()
     }
 
+    /// The box around both.
+    #[must_use]
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
     pub fn size(&self) -> Vec3 {
         if self.is_empty() {
             Vec3::ZERO

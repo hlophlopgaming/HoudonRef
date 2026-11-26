@@ -9,6 +9,10 @@ use serde::Deserialize;
 
 use crate::Model;
 
+mod view;
+
+pub use view::{AtlasView, Layer, LayerState, ShownStructure};
+
 /// The body system a structure belongs to: one of the Atlas's layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum BodySystem {
@@ -262,10 +266,16 @@ fn placed(id: &str, positions: &[Vec3], indices: &[u32], matrix: [f32; 16]) -> M
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn human() -> Atlas {
+    /// The human pack, read once for all tests.
+    pub(crate) fn human() -> Atlas {
+        static HUMAN: std::sync::OnceLock<Atlas> = std::sync::OnceLock::new();
+        HUMAN.get_or_init(read_human).clone()
+    }
+
+    fn read_human() -> Atlas {
         let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/atlas/human/");
         let read = |name: &str| std::fs::read(format!("{directory}{name}")).ok();
         let pack = AtlasPack::parse(&read(ATLAS_MANIFEST).unwrap()).unwrap();

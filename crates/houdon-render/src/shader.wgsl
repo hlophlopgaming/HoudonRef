@@ -426,7 +426,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         if u.params.y == 1u {
             solid = pow(solid, vec3<f32>(1.0 / 2.2));
         }
-        return vec4<f32>(solid, 1.0);
+        return vec4<f32>(solid, opacity(use_material, base_sample.a));
     }
 
     var direct = vec3<f32>(0.0);
@@ -486,7 +486,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
     }
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(color, opacity(use_material, base_sample.a));
+}
+
+// How solid the surface is: base_color.a carries the object's opacity
+// (times the material's own alpha), used by the see-through pipeline.
+fn opacity(use_material: bool, texture_alpha: f32) -> f32 {
+    return select(object.base_color.a, object.base_color.a * texture_alpha, use_material);
 }
 
 // The wireframe: each mesh edge as a line, pulled a little towards the eye

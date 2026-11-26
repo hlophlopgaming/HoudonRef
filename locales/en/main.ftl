@@ -6,7 +6,18 @@ section-studio = Studio
 section-atelier = Atelier
 language = Language
 
-atlas-coming = The anatomy atlas is coming: an écorché by layers, from skin to skeleton, with names in English, Russian and Latin.
+atlas-loading = Loading the anatomy…
+atlas-load-failed = The anatomy could not be loaded: { $reason }
+atlas-layers = Layers
+atlas-layer-bones = Bones
+atlas-layer-muscles = Muscles
+atlas-layer-fasciae = Fasciae and bursae
+atlas-layer-joints = Ligaments and joints
+atlas-opacity = See-through
+atlas-look = Look
+atlas-color-natural = Natural
+atlas-frame = Frame the body
+atlas-credit = Anatomy: Z-Anatomy (CC BY-SA 4.0), built on BodyParts3D (CC BY 4.0).
 atelier-coming = The drawing atelier is coming: timed sessions that go from a Loomis ball to planes to a detailed head, with changing angles and light.
 
 model-stats = { $triangles } triangles

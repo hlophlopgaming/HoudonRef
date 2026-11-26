@@ -75,6 +75,7 @@ pub(crate) fn background_pixels(image: &Image, background: [u8; 3]) -> usize {
 
 mod ambient_occlusion;
 mod anti_aliasing;
+mod atlas;
 mod export;
 mod lights;
 mod masks;

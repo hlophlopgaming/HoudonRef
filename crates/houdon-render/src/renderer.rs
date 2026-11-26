@@ -16,7 +16,7 @@ use crate::light_mask::MaskTextures;
 use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
-use crate::{Frame, FrameSurface, ObjectColors};
+use crate::{Frame, FrameObject, FrameSurface, ObjectColors};
 
 /// Roughness of plain colours (Clay, Random, the room): matte.
 const PLAIN_ROUGHNESS: f32 = 0.9;
@@ -162,6 +162,8 @@ struct DrawEntry {
     /// Draw the object's wireframe with this entry: its first part, never
     /// the room.
     wireframe: bool,
+    /// Blended over what is behind; drawn after every solid entry.
+    see_through: bool,
 }
 
 pub(crate) struct GpuMesh {
@@ -386,7 +388,19 @@ impl SceneRenderer {
         let clay = ObjectColors::uniform(frame.shading.clay_color);
         let mut entries = Vec::new();
         let mut uniforms = Vec::new();
-        for object in &frame.objects {
+        // Solid objects first, then see-through ones from far to near, so
+        // each blends over everything behind it.
+        let distance = |object: &&FrameObject| {
+            let centre = object
+                .transform
+                .transform_point3(object.model.bounds.center());
+            centre.distance_squared(frame.eye)
+        };
+        let (solid, mut see_through): (Vec<&FrameObject>, Vec<&FrameObject>) =
+            frame.objects.iter().partition(|o| o.opacity >= 1.0);
+        see_through.sort_by(|a, b| distance(b).total_cmp(&distance(a)));
+        for object in solid.into_iter().chain(see_through) {
+            let opacity = object.opacity.clamp(0.0, 1.0);
             let model = &object.model;
             for (part_index, part) in model.parts.iter().enumerate() {
                 let material = match object.surface {
@@ -399,10 +413,10 @@ impl SceneRenderer {
                 };
                 let (base_color, material_params) = match material.map(|m| &model.materials[m]) {
                     Some(m) => (
-                        m.base_color.to_array(),
+                        (m.base_color * glam::Vec4::new(1.0, 1.0, 1.0, opacity)).to_array(),
                         [m.metallic, m.roughness, 1.0, m.normal_scale],
                     ),
-                    None => ([1.0; 4], [0.0, PLAIN_ROUGHNESS, 0.0, 1.0]),
+                    None => ([1.0, 1.0, 1.0, opacity], [0.0, PLAIN_ROUGHNESS, 0.0, 1.0]),
                 };
                 if let Some(index) = material {
                     self.materials
@@ -428,6 +442,7 @@ impl SceneRenderer {
                     one_sided: object.one_sided || frame.shading.backface_culling,
                     casts_shadows: object.casts_shadows,
                     wireframe: part_index == 0 && !object.one_sided,
+                    see_through: opacity < 1.0,
                 });
             }
         }
@@ -730,11 +745,16 @@ impl SceneRenderer {
             let Some(mesh) = self.meshes.get(&entry.model_id) else {
                 continue;
             };
-            render_pass.set_pipeline(match (surfaces, entry.one_sided) {
-                (false, false) => &self.pipelines.two_sided,
-                (false, true) => &self.pipelines.one_sided,
-                (true, false) => &self.surface_pipelines.two_sided,
-                (true, true) => &self.surface_pipelines.one_sided,
+            if surfaces && entry.see_through {
+                // The overlays see the solid surfaces behind it.
+                continue;
+            }
+            render_pass.set_pipeline(match (surfaces, entry.one_sided, entry.see_through) {
+                (false, _, true) => &self.pipelines.see_through,
+                (false, false, false) => &self.pipelines.two_sided,
+                (false, true, false) => &self.pipelines.one_sided,
+                (true, false, _) => &self.surface_pipelines.two_sided,
+                (true, true, _) => &self.surface_pipelines.one_sided,
             });
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
@@ -784,6 +804,9 @@ struct ScenePipelines {
     one_sided: wgpu::RenderPipeline,
     /// The meshes' edges as lines over their surfaces.
     wireframe: wgpu::RenderPipeline,
+    /// See-through objects, blended over the solid ones: their front faces
+    /// only, without writing depth.
+    see_through: wgpu::RenderPipeline,
 }
 
 /// The surfaces pass's pipelines: never multisampled (see `fs_surface`).
@@ -801,6 +824,7 @@ impl SurfacePipelines {
         let output = SceneOutput {
             entry_point: "fs_surface",
             format: NORMAL_FORMAT,
+            blended: false,
         };
         let pipeline = |cull_mode, label| {
             scene_pipeline(device, pipeline_layout, shader, output, cull_mode, 1, label)
@@ -823,6 +847,7 @@ impl ScenePipelines {
         let output = SceneOutput {
             entry_point: "fs_main",
             format: target_format,
+            blended: false,
         };
         let pipeline = |cull_mode, label| {
             scene_pipeline(
@@ -835,10 +860,23 @@ impl ScenePipelines {
                 label,
             )
         };
+        let see_through = SceneOutput {
+            blended: true,
+            ..output
+        };
         Self {
             samples,
             two_sided: pipeline(None, "houdon_scene_pipeline"),
             one_sided: pipeline(Some(wgpu::Face::Back), "houdon_one_sided_pipeline"),
+            see_through: scene_pipeline(
+                device,
+                pipeline_layout,
+                shader,
+                see_through,
+                Some(wgpu::Face::Back),
+                samples,
+                "houdon_see_through_pipeline",
+            ),
             wireframe: wireframe_pipeline(device, pipeline_layout, shader, target_format, samples),
         }
     }
@@ -904,6 +942,8 @@ fn wireframe_pipeline(
 struct SceneOutput {
     entry_point: &'static str,
     format: wgpu::TextureFormat,
+    /// Blends over the picture and leaves the depth as it is.
+    blended: bool,
 }
 
 fn scene_pipeline(
@@ -939,8 +979,12 @@ fn scene_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: SCENE_DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_write_enabled: Some(!output.blended),
+            depth_compare: Some(if output.blended {
+                wgpu::CompareFunction::LessEqual
+            } else {
+                wgpu::CompareFunction::Less
+            }),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -953,7 +997,7 @@ fn scene_pipeline(
             entry_point: Some(output.entry_point),
             targets: &[Some(wgpu::ColorTargetState {
                 format: output.format,
-                blend: None,
+                blend: output.blended.then_some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),

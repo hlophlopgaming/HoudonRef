@@ -24,7 +24,8 @@ pub use file::{EmbeddedFile, LoadedScene, ModelSource, SceneFileError};
 pub struct ModelId(u64);
 
 impl ModelId {
-    fn next() -> Self {
+    /// A new id, never handed out before.
+    pub fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }

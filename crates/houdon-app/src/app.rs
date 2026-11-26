@@ -6,6 +6,7 @@ use houdon_i18n::{Language, Localizer};
 use houdon_render::{QualityGovernor, QualityLevel};
 use serde::{Deserialize, Serialize};
 
+use crate::atlas::AtlasTab;
 use crate::studio::{Studio, length_field};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -83,6 +84,7 @@ pub struct HoudonApp {
     localizer: Localizer,
     section: Section,
     studio: Studio,
+    atlas: AtlasTab,
     units: UnitSystem,
     figure_height: f32,
     anti_aliasing: bool,
@@ -148,6 +150,7 @@ impl HoudonApp {
             localizer,
             section: settings.section,
             studio,
+            atlas: AtlasTab::default(),
             units,
             figure_height,
             anti_aliasing: settings.anti_aliasing.unwrap_or(true),
@@ -267,6 +270,14 @@ impl eframe::App for HoudonApp {
             self.anti_aliasing,
             self.quality.level().budget(),
         );
+        self.atlas.apply_settings(
+            if self.anti_aliasing {
+                houdon_render::AntiAliasing::VIEWPORT
+            } else {
+                houdon_render::AntiAliasing::OFF
+            },
+            self.quality.level().budget(),
+        );
 
         self.toggle_presentation(ui.ctx());
         if !self.presentation {
@@ -279,7 +290,7 @@ impl eframe::App for HoudonApp {
 
         match self.section {
             Section::Studio => self.studio.ui(ui, &self.localizer, self.presentation),
-            Section::Atlas => coming_soon(ui, &self.localizer.tr("atlas-coming")),
+            Section::Atlas => self.atlas.ui(ui, &self.localizer),
             Section::Atelier => coming_soon(ui, &self.localizer.tr("atelier-coming")),
         }
         if self.settings_open {
