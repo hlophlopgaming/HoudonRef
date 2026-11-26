@@ -12,7 +12,7 @@ use crate::Frame;
 /// them, for the screen-space cavity (see `FragmentOutput` in shader.wgsl).
 pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// How much of each point's hemisphere is covered, for ambient occlusion.
-const OCCLUSION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+pub const OCCLUSION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
 /// Depth buffer of the scene's own picture.
 pub const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
@@ -83,8 +83,9 @@ pub struct SceneTarget {
     /// see `fs_surface`) and their own depth; never multisampled.
     pub surface_view: wgpu::TextureView,
     pub surface_depth_view: wgpu::TextureView,
-    /// Ambient occlusion's cover, before it is smoothed.
+    /// Ambient occlusion's cover, before and after it is smoothed.
     occlusion_view: wgpu::TextureView,
+    pub smooth_occlusion_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     occlusion_bind_group: wgpu::BindGroup,
 }
@@ -111,10 +112,13 @@ pub fn needs_surfaces(shading: &houdon_core::Shading) -> bool {
 pub struct Composite {
     pipeline: wgpu::RenderPipeline,
     occlusion_pipeline: wgpu::RenderPipeline,
+    smooth_occlusion_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     occlusion_layout: wgpu::BindGroupLayout,
     /// Whether the frame being prepared has ambient occlusion.
     ambient_occlusion: bool,
+    /// Counts the targets made, so users of their views know to rebind.
+    pub generation: u64,
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     color_format: wgpu::TextureFormat,
@@ -191,40 +195,58 @@ impl Composite {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("houdon_composite_pipeline_layout"),
-            bind_group_layouts: &[Some(&layout), Some(&occlusion_layout)],
+            bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
+        let smooth_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("houdon_smooth_occlusion_pipeline_layout"),
+                bind_group_layouts: &[Some(&layout), Some(&occlusion_layout)],
+                immediate_size: 0,
+            });
         let occlusion_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("houdon_occlusion_pipeline_layout"),
                 bind_group_layouts: &[Some(&layout)],
                 immediate_size: 0,
             });
-        let occlusion_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("houdon_occlusion_pipeline"),
-            layout: Some(&occlusion_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_composite"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_occlusion"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: OCCLUSION_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let occlusion_pass = |label, layout, entry_point| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_composite"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: OCCLUSION_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let occlusion_pipeline = occlusion_pass(
+            "houdon_occlusion_pipeline",
+            &occlusion_pipeline_layout,
+            "fs_occlusion",
+        );
+        let smooth_occlusion_pipeline = occlusion_pass(
+            "houdon_smooth_occlusion_pipeline",
+            &smooth_pipeline_layout,
+            "fs_smooth_occlusion",
+        );
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("houdon_composite_pipeline"),
             layout: Some(&pipeline_layout),
@@ -272,9 +294,11 @@ impl Composite {
         Self {
             pipeline,
             occlusion_pipeline,
+            smooth_occlusion_pipeline,
             layout,
             occlusion_layout,
             ambient_occlusion: false,
+            generation: 0,
             sampler,
             uniforms,
             color_format,
@@ -311,6 +335,7 @@ impl Composite {
             .is_none_or(|t| t.size != size || t.samples != samples)
         {
             self.target = Some(self.create_target(device, size, samples));
+            self.generation += 1;
         }
         let (mode, tones) = match value.mode {
             ValueMode::Off => (0.0, 0.0),
@@ -366,28 +391,42 @@ impl Composite {
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    /// Works out ambient occlusion's cover from the picture of surfaces,
-    /// when the prepared frame has it. Call after the surface pass.
+    /// Works out ambient occlusion's cover from the picture of surfaces and
+    /// smooths it, when the prepared frame has it. Call after the surface
+    /// pass and before the scene pass, which reads it.
     pub fn draw_occlusion(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(target) = self.target.as_ref().filter(|_| self.ambient_occlusion) else {
             return;
         };
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("houdon_occlusion_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.occlusion_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.occlusion_pipeline);
-        pass.set_bind_group(0, &target.bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        let passes = [
+            (&self.occlusion_pipeline, &target.occlusion_view, false),
+            (
+                &self.smooth_occlusion_pipeline,
+                &target.smooth_occlusion_view,
+                true,
+            ),
+        ];
+        for (pipeline, view, smoothing) in passes {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_occlusion_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &target.bind_group, &[]);
+            if smoothing {
+                pass.set_bind_group(1, &target.occlusion_bind_group, &[]);
+            }
+            pass.draw(0..3, 0..1);
+        }
     }
 
     /// Draws the scene picture, as a value study if one is on.
@@ -395,7 +434,6 @@ impl Composite {
         if let Some(target) = &self.target {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &target.bind_group, &[]);
-            pass.set_bind_group(1, &target.occlusion_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
     }
@@ -452,6 +490,12 @@ impl Composite {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             1,
         );
+        let smooth_occlusion_view = texture(
+            "houdon_scene_smooth_occlusion",
+            OCCLUSION_FORMAT,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            1,
+        );
         let occlusion_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("houdon_occlusion_bind_group"),
             layout: &self.occlusion_layout,
@@ -497,6 +541,7 @@ impl Composite {
             surface_view,
             surface_depth_view,
             occlusion_view,
+            smooth_occlusion_view,
             bind_group,
             occlusion_bind_group,
         }

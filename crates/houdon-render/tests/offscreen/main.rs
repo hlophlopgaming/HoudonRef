@@ -86,6 +86,7 @@ mod room;
 mod shadows;
 mod soft_shadows;
 mod solid;
+mod tone;
 mod values;
 
 use lights::*;
