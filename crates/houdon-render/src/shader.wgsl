@@ -46,6 +46,7 @@ struct Globals {
     // shader (non-sRGB framebuffer).
     params: vec4<u32>,
     // x: 0 the Scene's lights; Solid: 1 studio, 2 matcap, 3 flat.
+    // y: ambient occlusion strength (0 when it is off).
     shading: vec4<f32>,
     // xyz: the camera's right and up directions.
     camera_right: vec4<f32>,
@@ -78,6 +79,9 @@ struct ObjectUniforms {
 // The Solid mode's matcap, linear colour.
 @group(0) @binding(3) var matcap: texture_2d<f32>;
 @group(0) @binding(4) var matcap_sampler: sampler;
+// Ambient occlusion's smoothed cover at each pixel of the picture (see
+// fs_smooth_occlusion in composite.wgsl); read only when shading.y > 0.
+@group(0) @binding(5) var occlusion: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var<uniform> shadows: Shadows;
 @group(2) @binding(1) var shadow_atlas: texture_depth_2d;
@@ -249,6 +253,24 @@ fn mask_through(light: Light, world: vec3<f32>) -> f32 {
     return textureSampleLevel(light_masks, light_mask_sampler, uv, i32(layer), 0.0).r;
 }
 
+// The shoulder of Khronos PBR Neutral tone mapping: light planes keep
+// their steps instead of all clipping to white. Below the shoulder nothing
+// changes, so shadows keep every value (the curve's toe is left out).
+fn tone_map(c: vec3<f32>) -> vec3<f32> {
+    let start = 0.76;
+    let desaturation = 0.15;
+    var color = max(c, vec3<f32>(0.0));
+    let peak = max(color.r, max(color.g, color.b));
+    if peak < start {
+        return color;
+    }
+    let d = 1.0 - start;
+    let new_peak = 1.0 - d * d / (peak + d - start);
+    color *= new_peak / peak;
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(color, vec3<f32>(new_peak), g);
+}
+
 // The Solid mode: light that ignores the Scene's lights, fixed to the view
 // so form reads the same from every side. `n` is the surface normal, `v`
 // the direction to the eye.
@@ -258,19 +280,29 @@ fn solid_color(n: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
         // Flat: one colour, no light.
         return albedo;
     }
-    // The normal as the camera sees it: x right, y up, z towards the eye.
-    let facing = vec3<f32>(dot(n, u.camera_right.xyz), dot(n, u.camera_up.xyz), dot(n, v));
+    // The normal as seen along this pixel's own ray: x right, y up, z
+    // towards the eye. Taking the ray rather than the camera's axis keeps
+    // a matcap and the studio light the same at the edges of a wide lens.
+    let side = normalize(cross(u.camera_up.xyz, v));
+    let up = cross(v, side);
+    let facing = vec3<f32>(dot(n, side), dot(n, up), dot(n, v));
     if mode > 1.5 {
         // The matcap's sphere, seen face on: the normal picks its point.
         let uv = facing.xy * vec2<f32>(0.49, -0.49) + 0.5;
         return textureSampleLevel(matcap, matcap_sampler, uv, 0.0).rgb * albedo;
     }
-    // Studio: a key light from the upper left, a weaker fill from the right
-    // and soft light from above.
-    let key = max(dot(facing, normalize(vec3<f32>(-0.65, 0.55, 0.5))), 0.0);
+    // Studio: a key light from the upper left with a soft highlight, a
+    // weaker fill from the right, light from above and a little rim light.
+    // Together they stay below white on a white surface, so planes facing
+    // the key still differ.
+    let key_direction = normalize(vec3<f32>(-0.65, 0.55, 0.5));
+    let key = max(dot(facing, key_direction), 0.0);
     let fill = max(dot(facing, normalize(vec3<f32>(0.75, 0.0, 0.6))), 0.0);
-    let sky = 0.12 + 0.08 * facing.y;
-    return albedo * (0.9 * key + 0.2 * fill + sky);
+    let sky = 0.14 + 0.08 * facing.y;
+    let rim = 0.12 * pow(1.0 - max(facing.z, 0.0), 3.0);
+    let half_way = normalize(key_direction + vec3<f32>(0.0, 0.0, 1.0));
+    let highlight = 0.12 * pow(max(dot(facing, half_way), 0.0), 24.0);
+    return albedo * (0.72 * key + 0.22 * fill + sky + rim) + vec3<f32>(highlight);
 }
 
 struct VertexInput {
@@ -289,11 +321,21 @@ struct VertexOutput {
     @location(3) curvature: f32,
 };
 
-// The geometry cavity: brighter on ridges, darker in hollows.
-fn geometry_cavity(curvature: f32) -> f32 {
+// Cavity's light and dark: `ridge` lightens towards white and `hollow`
+// darkens, each easing off so strong bends never clip to white or black.
+// For small bends it matches the old multiply on a mid grey.
+fn apply_cavity(color: vec3<f32>, ridge: f32, hollow: f32) -> vec3<f32> {
+    let lighten = 0.5 * (1.0 - exp(-4.0 * max(ridge, 0.0)));
+    let darken = 0.8 * (1.0 - exp(-2.5 * max(hollow, 0.0)));
+    let clamped = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    return (clamped + (1.0 - clamped) * lighten) * (1.0 - darken);
+}
+
+// The geometry cavity: lighter on ridges, darker in hollows.
+fn geometry_cavity(color: vec3<f32>, curvature: f32) -> vec3<f32> {
     let ridge = u.cavity.x * max(curvature, 0.0);
     let hollow = u.cavity.y * max(-curvature, 0.0);
-    return clamp(1.0 + 2.0 * (ridge - hollow), 0.0, 3.0);
+    return apply_cavity(color, ridge, hollow);
 }
 
 @vertex
@@ -375,7 +417,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
 
     if u.shading.x > 0.5 {
-        var solid = solid_color(n, v, albedo) * geometry_cavity(in.curvature);
+        var solid = solid_color(n, v, albedo);
+        if u.shading.x < 2.5 {
+            solid = tone_map(solid);
+        }
+        solid = geometry_cavity(solid, in.curvature);
         solid = mix(solid, object.highlight.rgb, object.highlight.a);
         if u.params.y == 1u {
             solid = pow(solid, vec3<f32>(1.0 / 2.2));
@@ -423,8 +469,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         direct += (diffuse + specular * PI) * light.color.rgb * attenuation * n_dot_l;
     }
     let ambient_light = mix(u.floor_color.rgb, u.backdrop_color.rgb, n.y * 0.5 + 0.5) * u.backdrop_color.a;
-    let ambient = ambient_light * ((1.0 - metallic) * albedo + f0 * (1.0 - roughness) * 0.5);
-    var color = (direct + ambient) * geometry_cavity(in.curvature);
+    var ambient = ambient_light * ((1.0 - metallic) * albedo + f0 * (1.0 - roughness) * 0.5);
+    if u.shading.y > 0.0 {
+        // Occlusion takes away the room's light, which reaches corners and
+        // folds less; the lights' own light keeps its shadows. A little of
+        // it still darkens direct light, as light bounces less in a crease.
+        let covered = textureLoad(occlusion, vec2<i32>(in.clip_position.xy), 0).r * u.shading.y;
+        // Squared: the light lost to each bounce in a crease adds up, so
+        // even a little cover reads.
+        let open = 1.0 - covered;
+        ambient *= open * open;
+        direct *= 1.0 - 0.25 * covered;
+    }
+    var color = geometry_cavity(tone_map(direct + ambient), in.curvature);
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));

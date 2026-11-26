@@ -249,3 +249,32 @@ fn backface_culling_hides_the_back_of_an_open_mesh() {
     let centre = sharp(&mut renderer, &culled).pixel(SIZE / 2, SIZE / 2);
     assert_eq!(centre[..3], background[..], "with culling it is hidden");
 }
+
+#[test]
+fn contour_lines_have_soft_edges() {
+    // A line's edge shades off over a pixel instead of a staircase: along
+    // the outline there are pixels between the line's colour and the ground.
+    use houdon_core::{Lines, ShadingMode};
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut scene = ridge_and_trench(ShadingMode::Solid);
+    scene.shading.lines = Lines {
+        contours: true,
+        color: RED_LINES,
+        ..Lines::default()
+    };
+    let lined = sharp(&mut renderer, &scene);
+    // The line's own colour, and a mix of it with what lies under it.
+    let is_full = |p: [u8; 4]| p[0] >= 250 && p[1] <= 5 && p[2] <= 5;
+    let full = lined.pixels().filter(|&p| is_full(p)).count();
+    let partly = lined
+        .pixels()
+        .filter(|&p| !is_full(p) && i32::from(p[0]) > i32::from(p[1].max(p[2])) + 25)
+        .count();
+    assert!(full > 20, "{full} line pixels");
+    assert!(
+        partly * 10 > full,
+        "{partly} soft edge pixels for {full} line pixels"
+    );
+}

@@ -3,8 +3,18 @@
 use crate::soft_shadows::cube;
 use crate::*;
 
-/// A 50 cm box on the floor of the room, seen from the front and above.
+/// A 50 cm box on the floor of the room, seen from the front and above,
+/// in the room's light alone: occlusion takes away the room's light.
 fn box_on_the_floor(ambient_occlusion: bool) -> Scene {
+    let mut scene = box_in_the_light(ambient_occlusion);
+    for light in scene.lights().to_vec() {
+        scene.remove_light(light.id);
+    }
+    scene
+}
+
+/// The same box with the scene's key light as well.
+fn box_in_the_light(ambient_occlusion: bool) -> Scene {
     let mut scene = Scene::new();
     let id = scene.add_model(cube(0.25));
     let object = scene.add_object(id).unwrap();
@@ -149,4 +159,31 @@ fn ambient_occlusion_leaves_no_grain_on_smooth_surfaces() {
     let (before, after) = (grain(&plain), grain(&occluded));
     // A plain floor has none; the old per-pixel noise measured over 25.
     assert!(after < before + 5.0, "grain {before:.2} -> {after:.2}");
+}
+
+#[test]
+fn ambient_occlusion_leaves_most_of_the_direct_light() {
+    // A light's own light keeps its shadows: occlusion only takes a little
+    // of it, where the room's light is lost.
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let plain = sharp(&mut renderer, &box_in_the_light(false));
+    let occluded = sharp(&mut renderer, &box_in_the_light(true));
+    let room_plain = sharp(&mut renderer, &box_on_the_floor(false));
+    let room_occluded = sharp(&mut renderer, &box_on_the_floor(true));
+    let scene = box_in_the_light(false);
+    let (x, y) = pixel_of(&scene, glam::Vec3::new(0.0, 0.0, 0.27));
+    let lost =
+        |a: &Image, b: &Image| brightness(a.pixel(x, y)) as i32 - brightness(b.pixel(x, y)) as i32;
+    let room_light_lost = lost(&room_plain, &room_occluded);
+    let total_lost = lost(&plain, &occluded);
+    assert!(
+        room_light_lost > 12,
+        "the room's light is lost: {room_light_lost}"
+    );
+    assert!(
+        total_lost < room_light_lost * 2,
+        "direct light stays: {total_lost} of all light lost, {room_light_lost} of the room's"
+    );
 }

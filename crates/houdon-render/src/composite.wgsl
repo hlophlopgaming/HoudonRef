@@ -15,8 +15,8 @@ struct Value {
     lines: vec4<f32>,
     // rgb: line colour, linear.
     line_color: vec4<f32>,
-    // Ambient occlusion: x strength (0 when off), y radius in metres,
-    // z samples.
+    // Ambient occlusion: y radius in metres, z samples (the scene shader
+    // applies its strength).
     ambient_occlusion: vec4<f32>,
     // x: tangent of half the vertical field of view; y: width over height.
     lens: vec4<f32>,
@@ -33,7 +33,8 @@ const MAX_SURFACE_DISTANCE: f32 = 200.0;
 // FragmentOutput in shader.wgsl). Read texel by texel, never filtered.
 @group(0) @binding(3) var normals: texture_2d<f32>;
 // How much of each point's hemisphere is covered (see fs_occlusion), at the
-// size of the surfaces picture. Only the composite reads it.
+// size of the surfaces picture, before it is smoothed. Only
+// fs_smooth_occlusion reads it.
 @group(1) @binding(0) var occlusion: texture_2d<f32>;
 
 struct VertexOutput {
@@ -67,12 +68,22 @@ fn surface_at(texel: vec2<i32>) -> vec3<f32> {
     return vec3<f32>(s.xy * 2.0 - 1.0, s.z + s.w / 255.0);
 }
 
+// Cavity's light and dark: `ridge` lightens towards white and `hollow`
+// darkens, each easing off so strong bends never clip to white or black.
+// For small bends it matches the old multiply on a mid grey.
+fn apply_cavity(color: vec3<f32>, ridge: f32, hollow: f32) -> vec3<f32> {
+    let lighten = 0.5 * (1.0 - exp(-4.0 * max(ridge, 0.0)));
+    let darken = 0.8 * (1.0 - exp(-2.5 * max(hollow, 0.0)));
+    let clamped = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    return (clamped + (1.0 - clamped) * lighten) * (1.0 - darken);
+}
+
 // The screen-space cavity: how the normals turn from one pixel to the next.
-// Turning outwards (a ridge) brightens, inwards (a hollow) darkens. Where
+// Turning outwards (a ridge) lightens, inwards (a hollow) darkens. Where
 // the distance jumps, at an outline, there is no cavity.
-fn screen_cavity(uv: vec2<f32>) -> f32 {
+fn screen_cavity(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     if value.cavity.x + value.cavity.y <= 0.0 {
-        return 1.0;
+        return color;
     }
     let size = vec2<f32>(textureDimensions(normals));
     let centre = vec2<i32>(uv * size);
@@ -86,12 +97,10 @@ fn screen_cavity(uv: vec2<f32>) -> f32 {
     let farthest = max(max(right.z, left.z), max(up.z, down.z));
     let jump = max(abs(right.z - left.z), abs(up.z - down.z));
     if max(here.z, farthest) >= 0.999 || jump > here.z * 0.05 {
-        return 1.0;
+        return color;
     }
     let bend = (right.x - left.x) + (up.y - down.y);
-    let ridge = value.cavity.x * max(bend, 0.0);
-    let hollow = value.cavity.y * max(-bend, 0.0);
-    return clamp(1.0 + 1.5 * (ridge - hollow), 0.3, 2.0);
+    return apply_cavity(color, value.cavity.x * 0.75 * max(bend, 0.0), value.cavity.y * 0.75 * max(-bend, 0.0));
 }
 
 // Whether a contour line passes here: an outline, where the surface
@@ -103,22 +112,42 @@ fn contour(uv: vec2<f32>) -> f32 {
     }
     let size = vec2<f32>(textureDimensions(normals));
     let centre = vec2<i32>(uv * size);
-    let reach = i32(max(round(value.lines.x), 1.0));
     let here = surface_at(centre);
     if here.z >= 0.999 {
         return 0.0;
     }
-    let right = surface_at(centre + vec2<i32>(reach, 0));
-    let left = surface_at(centre - vec2<i32>(reach, 0));
-    let up = surface_at(centre - vec2<i32>(0, reach));
-    let down = surface_at(centre + vec2<i32>(0, reach));
+    let width = max(value.lines.x, 0.5);
     let gap = here.z * 0.05 + 1e-4;
-    let behind = max(max(right.z, left.z), max(up.z, down.z)) - here.z;
-    if behind > gap {
-        return 1.0;
+    // Rings of radii across the line's edge: the share of rings that find
+    // an outline or a fold is how much of this pixel the line covers, so
+    // its edge is soft instead of a staircase.
+    var covered = 0.0;
+    for (var ring = 0; ring < 4; ring++) {
+        let radius = max(width - 0.25 + 0.25 * f32(ring), 0.5);
+        // The axes, then the diagonals at the same distance.
+        let straight = i32(max(round(radius), 1.0));
+        let slanted = i32(round(radius * 0.70710678));
+        // Normals turn more over a wider span: the fold threshold is for
+        // the span of the line's own width.
+        let fold = value.lines.y * f32(straight) / max(round(width), 1.0);
+        let right = surface_at(centre + vec2<i32>(straight, 0));
+        let left = surface_at(centre - vec2<i32>(straight, 0));
+        let up = surface_at(centre - vec2<i32>(0, straight));
+        let down = surface_at(centre + vec2<i32>(0, straight));
+        var found = max(max(right.z, left.z), max(up.z, down.z)) - here.z > gap
+            || length(right.xy - left.xy) + length(up.xy - down.xy) > fold;
+        if slanted > 0 {
+            let a = surface_at(centre + vec2<i32>(slanted, slanted));
+            let b = surface_at(centre - vec2<i32>(slanted, slanted));
+            let c = surface_at(centre + vec2<i32>(slanted, -slanted));
+            let d = surface_at(centre - vec2<i32>(slanted, -slanted));
+            found = found || max(max(a.z, b.z), max(c.z, d.z)) - here.z > gap
+                || length(a.xy - b.xy) + length(c.xy - d.xy) > fold * f32(slanted) * 1.41421356 / f32(straight);
+        }
+        covered += select(0.0, 0.25, found);
     }
-    let turn = length(right.xy - left.xy) + length(up.xy - down.xy);
-    return select(0.0, 1.0, turn > value.lines.y);
+    // Three of the four rings make a full line; fewer, its soft edge.
+    return min(covered * 1.5, 1.0);
 }
 
 // The point of the camera's space seen at `uv`, `distance` metres away:
@@ -139,7 +168,7 @@ fn picture_uv(p: vec3<f32>) -> vec2<f32> {
 // Ambient occlusion: how much of the hemisphere above a point other
 // surfaces cover, from the picture of distances and normals. Samples on a
 // spiral turned per pixel, the turns repeating every 4 x 4 pixels so that
-// `ambient_occlusion` can average the noise away over one such block.
+// fs_smooth_occlusion can average the noise away over one such block.
 fn covered(uv: vec2<f32>, texel: vec2<i32>) -> f32 {
     let size = vec2<f32>(textureDimensions(normals));
     let here = surface_at(texel);
@@ -188,19 +217,17 @@ fn fs_occlusion(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(covered(in.uv, vec2<i32>(in.position.xy)), 0.0, 0.0, 1.0);
 }
 
-// The light ambient occlusion leaves: the cover averaged over the 4 x 4
-// block of pixels around, which holds every turn of the samples once,
-// leaving out pixels of another surface so edges stay sharp.
-fn ambient_occlusion(uv: vec2<f32>) -> f32 {
-    let strength = value.ambient_occlusion.x;
-    if strength <= 0.0 {
-        return 1.0;
-    }
+// The cover smoothed: averaged over the 4 x 4 block of pixels around,
+// which holds every turn of the samples once, leaving out pixels of
+// another surface so edges stay sharp. The scene shader darkens the
+// room's light by it.
+@fragment
+fn fs_smooth_occlusion(in: VertexOutput) -> @location(0) vec4<f32> {
     let size = vec2<i32>(textureDimensions(occlusion));
-    let centre = vec2<i32>(uv * vec2<f32>(size));
+    let centre = vec2<i32>(in.position.xy);
     let here = surface_at(centre);
     if here.z >= 0.999 {
-        return 1.0;
+        return vec4<f32>(0.0);
     }
     var sum = 0.0;
     var total = 0.0;
@@ -216,7 +243,7 @@ fn ambient_occlusion(uv: vec2<f32>) -> f32 {
             }
         }
     }
-    return 1.0 - strength * sum / max(total, 1.0);
+    return vec4<f32>(sum / max(total, 1.0), 0.0, 0.0, 1.0);
 }
 
 @fragment
@@ -235,7 +262,7 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     // Lightness on encoded (perceptual) values, as an artist judges it.
     let encoded = encode(
-        colour / total * screen_cavity(in.uv) * ambient_occlusion(in.uv),
+        screen_cavity(colour / total, in.uv),
     );
     let lightness = dot(encoded, vec3<f32>(0.2126, 0.7152, 0.0722));
     var result = encoded;

@@ -55,6 +55,17 @@ const SHADE_STUDIO: f32 = 1.0;
 const SHADE_MATCAP: f32 = 2.0;
 const SHADE_FLAT: f32 = 3.0;
 
+/// How much ambient occlusion darkens the room's light: 0 when it is off,
+/// and outside the Lit mode.
+fn ambient_occlusion_strength(shading: &houdon_core::Shading) -> f32 {
+    let ao = &shading.ambient_occlusion;
+    if ao.enabled && shading.mode == ShadingMode::Lit {
+        ao.strength.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// `spot.w` of a light without a cone; the shader tests `spot.w > -1.5`.
 const NO_CONE: f32 = -2.0;
 
@@ -175,6 +186,10 @@ pub struct SceneRenderer {
     globals_buffer: wgpu::Buffer,
     globals_layout: wgpu::BindGroupLayout,
     globals_bind_group: wgpu::BindGroup,
+    /// Stands in for ambient occlusion until the first picture has its own.
+    no_occlusion: wgpu::TextureView,
+    /// The composite target generation the globals bind group was made for.
+    bound_generation: u64,
     masks: MaskTextures,
     matcap: MatcapTexture,
     /// Whether the last prepared frame draws wireframes.
@@ -261,8 +276,30 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let globals_bind_group =
-            globals_bind_group(device, &globals_layout, &globals_buffer, &masks, &matcap);
+        let no_occlusion = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("houdon_no_occlusion"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: crate::composite::OCCLUSION_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let globals_bind_group = globals_bind_group(
+            device,
+            &globals_layout,
+            &globals_buffer,
+            &masks,
+            &matcap,
+            &no_occlusion,
+        );
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let object_stride = (size_of::<ObjectUniforms>() as u64).div_ceil(alignment) * alignment;
@@ -279,6 +316,8 @@ impl SceneRenderer {
             globals_buffer,
             globals_layout,
             globals_bind_group,
+            no_occlusion,
+            bound_generation: 0,
             masks,
             matcap,
             wireframe: false,
@@ -443,7 +482,12 @@ impl SceneRenderer {
             floor_color: room.floor_color.extend(0.0).to_array(),
             eye: frame.eye.extend(1.0).to_array(),
             params: [count as u32, u32::from(self.gamma_encode), 0, 0],
-            shading: [self.shade_code(device, queue, frame), 0.0, 0.0, 0.0],
+            shading: [
+                self.shade_code(device, queue, frame),
+                ambient_occlusion_strength(&frame.shading),
+                0.0,
+                0.0,
+            ],
             camera_right: frame.camera_right.extend(0.0).to_array(),
             camera_up: frame.camera_up.extend(0.0).to_array(),
             wire: frame
@@ -518,6 +562,9 @@ impl SceneRenderer {
             frame.shading.lines.wireframe && frame.shading.lines.wireframe_opacity > 0.0;
         self.composite
             .prepare(device, queue, size, anti_aliasing, frame);
+        if self.composite.generation != self.bound_generation {
+            self.rebind_globals(device);
+        }
     }
 
     /// Draws the scene into its pictures, and the wireframe over it.
@@ -540,6 +587,33 @@ impl SceneRenderer {
         } else {
             wgpu::StoreOp::Discard
         };
+        // Surfaces and ambient occlusion first: the scene pass reads them.
+        if needs_surfaces(&frame.shading) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("houdon_surface_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // No surface: the farthest distance.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &target.surface_depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            self.draw_scene(&mut pass, true);
+        }
+        self.composite.draw_occlusion(encoder);
         let color = target.color_attachment();
         {
             let (view, resolve_target) = color;
@@ -571,32 +645,6 @@ impl SceneRenderer {
             });
             self.draw_scene(&mut pass, false);
         }
-        if needs_surfaces(&frame.shading) {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("houdon_surface_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.surface_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // No surface: the farthest distance.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &target.surface_depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            self.draw_scene(&mut pass, true);
-        }
-        self.composite.draw_occlusion(encoder);
         if wireframe {
             // Its own pass: WebGL2 cannot blend one target and not another.
             let (view, resolve_target) = color;
@@ -629,6 +677,24 @@ impl SceneRenderer {
         }
     }
 
+    /// Remakes the globals bind group, for a new matcap or new pictures.
+    fn rebind_globals(&mut self, device: &wgpu::Device) {
+        let occlusion = self
+            .composite
+            .target
+            .as_ref()
+            .map_or(&self.no_occlusion, |t| &t.smooth_occlusion_view);
+        self.globals_bind_group = globals_bind_group(
+            device,
+            &self.globals_layout,
+            &self.globals_buffer,
+            &self.masks,
+            &self.matcap,
+            occlusion,
+        );
+        self.bound_generation = self.composite.generation;
+    }
+
     /// How `frame`'s surfaces are lit, uploading its matcap if it uses one.
     fn shade_code(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) -> f32 {
         let shading = &frame.shading;
@@ -640,13 +706,7 @@ impl SceneRenderer {
                 if image.width.max(image.height) <= device.limits().max_texture_dimension_2d =>
             {
                 if self.matcap.prepare(device, queue, image) {
-                    self.globals_bind_group = globals_bind_group(
-                        device,
-                        &self.globals_layout,
-                        &self.globals_buffer,
-                        &self.masks,
-                        &self.matcap,
-                    );
+                    self.rebind_globals(device);
                 }
                 SHADE_MATCAP
             }
@@ -950,6 +1010,16 @@ fn globals_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -960,6 +1030,7 @@ fn globals_bind_group(
     globals: &wgpu::Buffer,
     masks: &MaskTextures,
     matcap: &MatcapTexture,
+    occlusion: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("houdon_globals_bind_group"),
@@ -984,6 +1055,10 @@ fn globals_bind_group(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: wgpu::BindingResource::Sampler(&matcap.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(occlusion),
             },
         ],
     })
