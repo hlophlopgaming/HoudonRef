@@ -122,7 +122,10 @@ impl Studio {
         painter.add(eframe::egui_wgpu::Callback::new_paint_callback(
             rect,
             ViewportCallback {
-                frame: Frame::from_scene(&self.scene, aspect),
+                frame: Frame {
+                    quality: self.quality,
+                    ..Frame::from_scene(&self.scene, aspect)
+                },
                 size: self.view_size,
                 anti_aliasing: self.anti_aliasing,
             },

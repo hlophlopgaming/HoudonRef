@@ -216,6 +216,7 @@ pub struct ShadowResources {
     pub layout: wgpu::BindGroupLayout,
     pub bind_group: wgpu::BindGroup,
     uniforms_buffer: wgpu::Buffer,
+    sampler: wgpu::Sampler,
     atlas_view: wgpu::TextureView,
     depth_copy_view: wgpu::TextureView,
     atlas_size: u32,
@@ -236,38 +237,7 @@ impl ShadowResources {
         atlas_size: u32,
     ) -> Self {
         let atlas_size = atlas_size.min(device.limits().max_texture_dimension_2d);
-        let atlas = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("houdon_shadow_atlas"),
-            size: wgpu::Extent3d {
-                width: atlas_size,
-                height: atlas_size,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: SHADOW_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_copy_view = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("houdon_shadow_depth_copy"),
-                size: wgpu::Extent3d {
-                    width: atlas_size,
-                    height: atlas_size,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: DEPTH_COPY_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let (atlas_view, depth_copy_view) = atlas_textures(device, atlas_size);
 
         let uniforms_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("houdon_shadow_uniforms"),
@@ -329,28 +299,14 @@ impl ShadowResources {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("houdon_shadow_bind_group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&depth_copy_view),
-                },
-            ],
-        });
+        let bind_group = atlas_bind_group(
+            device,
+            &layout,
+            &uniforms_buffer,
+            &sampler,
+            &atlas_view,
+            &depth_copy_view,
+        );
 
         // One view-projection matrix per light view, at aligned offsets.
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment);
@@ -445,6 +401,7 @@ impl ShadowResources {
             layout,
             bind_group,
             uniforms_buffer,
+            sampler,
             atlas_view,
             depth_copy_view,
             atlas_size,
@@ -455,6 +412,33 @@ impl ShadowResources {
             fingerprint: None,
             builds: 0,
         }
+    }
+
+    /// The side of the atlas in texels.
+    pub fn atlas_size(&self) -> u32 {
+        self.atlas_size
+    }
+
+    /// Changes the shadow budget to `atlas_size` texels a side (at most what
+    /// the device allows); the atlas is redrawn on the next frame.
+    pub fn set_atlas_size(&mut self, device: &wgpu::Device, atlas_size: u32) {
+        let atlas_size = atlas_size.min(device.limits().max_texture_dimension_2d);
+        if atlas_size == self.atlas_size {
+            return;
+        }
+        let (atlas_view, depth_copy_view) = atlas_textures(device, atlas_size);
+        self.bind_group = atlas_bind_group(
+            device,
+            &self.layout,
+            &self.uniforms_buffer,
+            &self.sampler,
+            &atlas_view,
+            &depth_copy_view,
+        );
+        self.atlas_view = atlas_view;
+        self.depth_copy_view = depth_copy_view;
+        self.atlas_size = atlas_size;
+        self.fingerprint = None;
     }
 
     /// Writes the shadow data for `frame` and, when a light or a caster
@@ -522,6 +506,77 @@ impl ShadowResources {
             draw_casters(&mut pass);
         }
     }
+}
+
+/// The shadow atlas and its readable depth copy, `size` texels a side.
+fn atlas_textures(
+    device: &wgpu::Device,
+    atlas_size: u32,
+) -> (wgpu::TextureView, wgpu::TextureView) {
+    let atlas = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("houdon_shadow_atlas"),
+        size: wgpu::Extent3d {
+            width: atlas_size,
+            height: atlas_size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SHADOW_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+    let depth_copy_view = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("houdon_shadow_depth_copy"),
+            size: wgpu::Extent3d {
+                width: atlas_size,
+                height: atlas_size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_COPY_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    (atlas_view, depth_copy_view)
+}
+
+fn atlas_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniforms_buffer: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    atlas_view: &wgpu::TextureView,
+    depth_copy_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("houdon_shadow_bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(atlas_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(depth_copy_view),
+            },
+        ],
+    })
 }
 
 #[cfg(test)]

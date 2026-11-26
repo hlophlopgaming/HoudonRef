@@ -55,7 +55,7 @@ Done:
 Next:
 
 - [ ] OBJ import (#14); desktop `.blend` import through an installed Blender (#8); web and Android show conversion instructions instead.
-- [ ] Automatic quality (#19).
+- [x] Automatic quality (#19).
 
 Stage 1b: area lights with soft shadows, the Render mode (ADR 0001), HDRI rooms, dragging lights in the viewport.
 

@@ -3,6 +3,7 @@
 use houdon_core::UnitSystem;
 use houdon_core::model::DEFAULT_FIGURE_HEIGHT;
 use houdon_i18n::{Language, Localizer};
+use houdon_render::{QualityGovernor, QualityLevel};
 use serde::{Deserialize, Serialize};
 
 use crate::studio::{Studio, length_field};
@@ -39,6 +40,8 @@ struct Settings {
     figure_height: Option<f32>,
     /// Smooth edges in the viewport; on unless turned off.
     anti_aliasing: Option<bool>,
+    /// "low", "medium" or "high"; automatic when unset.
+    quality: Option<String>,
 }
 
 fn units_code(units: UnitSystem) -> &'static str {
@@ -55,6 +58,22 @@ fn units_message_id(units: UnitSystem) -> &'static str {
     }
 }
 
+fn quality_code(level: QualityLevel) -> &'static str {
+    match level {
+        QualityLevel::Low => "low",
+        QualityLevel::Medium => "medium",
+        QualityLevel::High => "high",
+    }
+}
+
+fn quality_message_id(level: QualityLevel) -> &'static str {
+    match level {
+        QualityLevel::Low => "settings-quality-low",
+        QualityLevel::Medium => "settings-quality-medium",
+        QualityLevel::High => "settings-quality-high",
+    }
+}
+
 /// Figure heights the settings accept, metres.
 const FIGURE_HEIGHTS: std::ops::RangeInclusive<f32> = 0.3..=3.0;
 
@@ -67,6 +86,9 @@ pub struct HoudonApp {
     units: UnitSystem,
     figure_height: f32,
     anti_aliasing: bool,
+    /// Rendering quality: the artist's choice, or one that follows the
+    /// hardware and frame times.
+    quality: QualityGovernor,
     settings_open: bool,
     /// Only the Studio's viewport shows, to draw from the screen.
     presentation: bool,
@@ -101,6 +123,21 @@ impl HoudonApp {
             .filter(|h| FIGURE_HEIGHTS.contains(h))
             .unwrap_or(DEFAULT_FIGURE_HEIGHT);
 
+        let manual_quality = settings.quality.as_deref().and_then(|code| {
+            QualityLevel::ALL
+                .into_iter()
+                .find(|level| quality_code(*level) == code)
+        });
+        let start_quality =
+            cc.wgpu_render_state
+                .as_ref()
+                .map_or(QualityLevel::Medium, |render_state| {
+                    let adapter = render_state.adapter.get_info();
+                    let level = QualityLevel::for_adapter(&adapter);
+                    log::info!("graphics adapter {adapter:?}: starting at {level:?} quality");
+                    level
+                });
+
         let localizer = Localizer::new(language);
         let mut studio = Studio::new();
         studio.load_presets(&localizer);
@@ -114,6 +151,7 @@ impl HoudonApp {
             units,
             figure_height,
             anti_aliasing: settings.anti_aliasing.unwrap_or(true),
+            quality: QualityGovernor::new(start_quality, manual_quality),
             settings_open: false,
             presentation: false,
         }
@@ -160,6 +198,24 @@ impl HoudonApp {
                 ui.separator();
                 ui.checkbox(&mut self.anti_aliasing, tr.tr("settings-anti-aliasing"));
                 ui.weak(tr.tr("settings-anti-aliasing-hint"));
+                ui.separator();
+                ui.strong(tr.tr("settings-quality"));
+                let mut manual = self.quality.manual();
+                let automatic = tr.tr_args(
+                    "settings-quality-auto",
+                    &[(
+                        "level",
+                        tr.tr(quality_message_id(self.quality.automatic())).into(),
+                    )],
+                );
+                ui.radio_value(&mut manual, None, automatic);
+                for level in QualityLevel::ALL {
+                    ui.radio_value(&mut manual, Some(level), tr.tr(quality_message_id(level)));
+                }
+                ui.weak(tr.tr("settings-quality-hint"));
+                if manual != self.quality.manual() {
+                    self.quality.set_manual(manual);
+                }
             });
         self.settings_open = open;
     }
@@ -198,8 +254,19 @@ impl eframe::App for HoudonApp {
         if let Some(height) = self.studio.poll_file_loads(ui.ctx(), &self.localizer) {
             self.figure_height = height;
         }
-        self.studio
-            .apply_settings(self.units, self.figure_height, self.anti_aliasing);
+        if self.section == Section::Studio && self.quality.frame(ui.ctx().input(|i| i.unstable_dt))
+        {
+            log::info!(
+                "frames stay slow: quality lowered to {:?}",
+                self.quality.automatic()
+            );
+        }
+        self.studio.apply_settings(
+            self.units,
+            self.figure_height,
+            self.anti_aliasing,
+            self.quality.level().budget(),
+        );
 
         self.toggle_presentation(ui.ctx());
         if !self.presentation {
@@ -227,6 +294,10 @@ impl eframe::App for HoudonApp {
             units: Some(units_code(self.units).to_owned()),
             figure_height: Some(self.figure_height),
             anti_aliasing: Some(self.anti_aliasing),
+            quality: self
+                .quality
+                .manual()
+                .map(|level| quality_code(level).to_owned()),
         };
         eframe::set_value(storage, SETTINGS_KEY, &settings);
     }

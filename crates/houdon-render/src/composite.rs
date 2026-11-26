@@ -298,6 +298,7 @@ impl Composite {
                     if on { ao.strength.clamp(0.0, 1.0) } else { 0.0 },
                     ao.radius.clamp(0.01, AmbientOcclusion::MAX_RADIUS),
                     ao.samples
+                        .min(frame.quality.ambient_occlusion_samples)
                         .clamp(AmbientOcclusion::MIN_SAMPLES, AmbientOcclusion::MAX_SAMPLES)
                         as f32,
                     0.0,

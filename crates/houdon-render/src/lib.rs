@@ -11,11 +11,13 @@ mod light_mask;
 mod matcap;
 mod material;
 mod offscreen;
+mod quality;
 mod renderer;
 mod shadow;
 
 pub use composite::AntiAliasing;
 pub use frame::{Frame, FrameObject, FrameSurface, ObjectColors};
 pub use offscreen::{ExportSize, Image, OffscreenError, OffscreenRenderer, PendingImage};
+pub use quality::{QualityGovernor, QualityLevel, RenderQuality};
 pub use renderer::{SceneRenderer, ViewportCallback};
 pub use shadow::{DEFAULT_ATLAS_SIZE, MAX_SHADOW_VIEWS};

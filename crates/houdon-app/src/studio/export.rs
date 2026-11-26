@@ -40,7 +40,10 @@ impl Studio {
             .renderer
             .get_or_insert_with(|| OffscreenRenderer::from_device(device, queue));
         let [width, height] = size.pixels(self.view_size, renderer.max_side());
-        let frame = Frame::from_scene(&self.scene, width as f32 / height as f32);
+        let frame = Frame {
+            quality: self.quality,
+            ..Frame::from_scene(&self.scene, width as f32 / height as f32)
+        };
         exporter.pending = Some(renderer.start(&frame, width, height, AntiAliasing::EXPORT));
     }
 
