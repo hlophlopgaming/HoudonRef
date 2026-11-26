@@ -75,7 +75,9 @@ impl Tissue {
         match self {
             Self::Bone => Vec3::new(0.78, 0.72, 0.58),
             Self::Tooth => Vec3::new(0.86, 0.84, 0.76),
-            Self::Cartilage => Vec3::new(0.62, 0.70, 0.74),
+            // Pearly, a little cooler than bone: the ribcage reads as one
+            // form, with the cartilage still told apart.
+            Self::Cartilage => Vec3::new(0.80, 0.77, 0.68),
             Self::Muscle => Vec3::new(0.50, 0.10, 0.09),
             Self::Tendon => Vec3::new(0.78, 0.74, 0.66),
             Self::Fascia => Vec3::new(0.70, 0.66, 0.62),
@@ -629,6 +631,21 @@ mod tests {
         assert!(
             view.shown().all(|s| !s.selected),
             "selection of a hidden part shows nothing"
+        );
+    }
+
+    #[test]
+    fn cartilage_looks_like_part_of_the_skeleton() {
+        let bone = Tissue::Bone.natural_color();
+        let cartilage = Tissue::Cartilage.natural_color();
+        let brightness = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        assert!(
+            (brightness(cartilage) - brightness(bone)).abs() < 0.1,
+            "as light as bone: {cartilage} {bone}"
+        );
+        assert!(
+            cartilage.z / cartilage.x > bone.z / bone.x,
+            "a little cooler"
         );
     }
 
