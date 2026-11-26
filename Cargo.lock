@@ -1224,6 +1224,7 @@ dependencies = [
  "houdon-core",
  "houdon-i18n",
  "houdon-render",
+ "image",
  "js-sys",
  "log",
  "rfd",

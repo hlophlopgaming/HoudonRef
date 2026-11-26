@@ -1,5 +1,7 @@
 //! Pictures of a scene without a window: PNG export and render tests.
 
+use std::sync::{Arc, Mutex};
+
 use egui_wgpu::wgpu;
 
 use crate::{AntiAliasing, Frame, SceneRenderer};
@@ -38,6 +40,37 @@ pub enum OffscreenError {
     NoDevice(#[from] wgpu::RequestDeviceError),
 }
 
+/// The sizes a picture can be exported at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportSize {
+    /// The viewport's own size.
+    Window,
+    /// Twice the viewport's size per side.
+    Double,
+    /// 4096 pixels on the long side.
+    Large,
+}
+
+impl ExportSize {
+    pub const ALL: [Self; 3] = [Self::Window, Self::Double, Self::Large];
+    /// The long side of [`ExportSize::Large`], pixels.
+    pub const LARGE_SIDE: u32 = 4096;
+
+    /// The picture's size for a viewport of `window` pixels, keeping its
+    /// proportions and staying within `max_side`.
+    pub fn pixels(self, window: [u32; 2], max_side: u32) -> [u32; 2] {
+        let [w, h] = window.map(|side| side.max(1) as f32);
+        let long = w.max(h);
+        let wanted = match self {
+            Self::Window => long,
+            Self::Double => long * 2.0,
+            Self::Large => Self::LARGE_SIDE as f32,
+        };
+        let scale = wanted.min(max_side as f32) / long;
+        [w, h].map(|side| ((side * scale).round() as u32).max(1))
+    }
+}
+
 /// Renders frames into images on its own device.
 pub struct OffscreenRenderer {
     device: wgpu::Device,
@@ -48,6 +81,7 @@ pub struct OffscreenRenderer {
 impl OffscreenRenderer {
     /// Opens a GPU device of its own, limited to the WebGL2 feature level so
     /// what passes here also runs on the base render tier.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_headless() -> Result<Self, OffscreenError> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -86,13 +120,15 @@ impl OffscreenRenderer {
         self.renderer.shadow_map_builds()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Renders `frame` into a `width` × `height` picture with the
     /// anti-aliasing of exported pictures.
     pub fn render(&mut self, frame: &Frame, width: u32, height: u32) -> Image {
         self.render_with(frame, width, height, AntiAliasing::EXPORT)
     }
 
-    /// Renders `frame` into a `width` × `height` picture.
+    /// Renders `frame` into a `width` × `height` picture, waiting for it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn render_with(
         &mut self,
         frame: &Frame,
@@ -100,6 +136,38 @@ impl OffscreenRenderer {
         height: u32,
         anti_aliasing: AntiAliasing,
     ) -> Image {
+        let pending = self.start(frame, width, height, anti_aliasing);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("GPU device lost while rendering offscreen");
+        pending
+            .take()
+            .expect("the picture was read back after waiting")
+            .expect("reading back the offscreen picture")
+    }
+
+    /// The largest picture side this device can render, pixels.
+    pub fn max_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
+    /// Checks whether `pending` has arrived, without waiting: on the web the
+    /// GPU cannot be waited for, so the app asks again on later frames.
+    pub fn poll(&self, pending: &PendingImage) -> Option<Result<Image, String>> {
+        // Polling only moves finished work along; an error shows in the map.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        pending.take()
+    }
+
+    /// Starts rendering `frame` into a `width` × `height` picture and
+    /// reading it back; [`OffscreenRenderer::poll`] returns it once there.
+    pub fn start(
+        &mut self,
+        frame: &Frame,
+        width: u32,
+        height: u32,
+        anti_aliasing: AntiAliasing,
+    ) -> PendingImage {
         let size = wgpu::Extent3d {
             width,
             height,
@@ -177,29 +245,63 @@ impl OffscreenRenderer {
         );
         self.queue.submit([encoder.finish()]);
 
-        let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |result| {
-            if let Err(error) = result {
-                log::error!("reading back the offscreen picture failed: {error}");
-            }
-        });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("GPU device lost while rendering offscreen");
-
-        let mapped = slice
-            .get_mapped_range()
-            .expect("the readback buffer was mapped above");
-        let mut rgba = Vec::with_capacity((unpadded_row * height) as usize);
-        for row in mapped.chunks(padded_row as usize) {
-            rgba.extend_from_slice(&row[..unpadded_row as usize]);
-        }
-        drop(mapped);
-        readback.unmap();
-        Image {
+        let state = Arc::new(Mutex::new(MapState::Waiting));
+        let done = Arc::clone(&state);
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                *done.lock().unwrap() = match result {
+                    Ok(()) => MapState::Mapped,
+                    Err(error) => MapState::Failed(error.to_string()),
+                };
+            });
+        PendingImage {
+            readback,
+            state,
             width,
             height,
-            rgba,
+            padded_row,
+        }
+    }
+}
+
+enum MapState {
+    Waiting,
+    Mapped,
+    Failed(String),
+}
+
+/// A picture on its way back from the GPU.
+pub struct PendingImage {
+    readback: wgpu::Buffer,
+    state: Arc<Mutex<MapState>>,
+    width: u32,
+    height: u32,
+    padded_row: u32,
+}
+
+impl PendingImage {
+    /// The picture once read back, or why it could not be; `None` while
+    /// it is still on its way.
+    fn take(&self) -> Option<Result<Image, String>> {
+        match &*self.state.lock().unwrap() {
+            MapState::Waiting => None,
+            MapState::Failed(reason) => Some(Err(reason.clone())),
+            MapState::Mapped => {
+                let unpadded_row = (self.width * 4) as usize;
+                let mapped = self.readback.slice(..).get_mapped_range().ok()?;
+                let mut rgba = Vec::with_capacity(unpadded_row * self.height as usize);
+                for row in mapped.chunks(self.padded_row as usize) {
+                    rgba.extend_from_slice(&row[..unpadded_row]);
+                }
+                drop(mapped);
+                self.readback.unmap();
+                Some(Ok(Image {
+                    width: self.width,
+                    height: self.height,
+                    rgba,
+                }))
+            }
         }
     }
 }

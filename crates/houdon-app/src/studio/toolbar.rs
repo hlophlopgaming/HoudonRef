@@ -1,7 +1,10 @@
 //! The toolbar over the viewport: the scene file, adding models, the
 //! shading mode, the value study, framing, and help with the controls.
 
+use houdon_render::ExportSize;
+
 use super::display::shading_mode_buttons;
+use super::export::export_size_message_id;
 use super::*;
 
 impl Studio {
@@ -18,6 +21,15 @@ impl Studio {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 ui.checkbox(&mut self.embed_models, tr.tr("scene-embed-models"));
+                ui.separator();
+                ui.weak(tr.tr("export-title"));
+                for size in ExportSize::ALL {
+                    let button = egui::Button::new(tr.tr(export_size_message_id(size)));
+                    if ui.add_enabled(!self.exporter.is_busy(), button).clicked() {
+                        self.export_picture(size);
+                        ui.close();
+                    }
+                }
             });
             ui.menu_button(tr.tr("toolbar-add"), |ui| self.add_menu(ui, tr));
             ui.separator();
@@ -52,6 +64,13 @@ impl Studio {
                 self.pending_frame = Some(FrameTarget::Selected);
             }
             ui.separator();
+            if ui
+                .button(tr.tr("toolbar-presentation"))
+                .on_hover_text(tr.tr("toolbar-presentation-hint"))
+                .clicked()
+            {
+                self.presentation_requested = true;
+            }
             ui.menu_button("?", |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.set_min_width(340.0);

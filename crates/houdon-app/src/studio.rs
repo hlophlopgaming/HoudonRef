@@ -20,6 +20,7 @@ use crate::matcaps::{self, MatcapLibrary};
 mod builtins;
 mod camera;
 mod display;
+mod export;
 mod files;
 mod light_presets;
 mod lights;
@@ -76,6 +77,11 @@ pub struct Studio {
     camera_target: CameraTarget,
     /// The viewport's width over its height, last drawn.
     view_aspect: f32,
+    /// The viewport's size in device pixels, last drawn.
+    view_size: [u32; 2],
+    exporter: export::Exporter,
+    /// The toolbar asked for presentation mode; the app takes it.
+    presentation_requested: bool,
 }
 
 impl Studio {
@@ -101,6 +107,9 @@ impl Studio {
             room_presets: SavedPresets::default(),
             camera_target: CameraTarget::Scene,
             view_aspect: 1.5,
+            view_size: [1280, 720],
+            exporter: export::Exporter::default(),
+            presentation_requested: false,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
@@ -168,7 +177,23 @@ impl Studio {
         self.scene.set_figure_height(figure_height);
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, tr: &Localizer) {
+    /// Whether the toolbar asked for presentation mode since last asked.
+    pub fn take_presentation_request(&mut self) -> bool {
+        std::mem::take(&mut self.presentation_requested)
+    }
+
+    /// Lets the Studio render offscreen (picture export) on the app's GPU.
+    pub fn set_render_state(&mut self, render_state: &eframe::egui_wgpu::RenderState) {
+        self.exporter.set_device(render_state);
+    }
+
+    /// The Studio. In `presentation` only the viewport shows.
+    pub fn ui(&mut self, ui: &mut egui::Ui, tr: &Localizer, presentation: bool) {
+        self.poll_export(ui.ctx(), tr);
+        if presentation {
+            egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, tr));
+            return;
+        }
         egui::Panel::left("studio_panel")
             .resizable(true)
             .default_size(260.0)

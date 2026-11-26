@@ -240,8 +240,14 @@ impl Composite {
         let shading = &frame.shading;
         let (value, cavity, lines) = (&shading.value, &shading.cavity, &shading.lines);
         let max = device.limits().max_texture_dimension_2d;
-        let scale = anti_aliasing.supersample;
-        let size = output_size.map(|side| (side.max(1) * scale).min(max));
+        // Without supersampling when that would pass the device's largest
+        // texture: clamping each side apart would change the proportions.
+        let output_size = output_size.map(|side| side.clamp(1, max));
+        let fits = output_size
+            .iter()
+            .all(|&side| side * anti_aliasing.supersample <= max);
+        let scale = if fits { anti_aliasing.supersample } else { 1 };
+        let size = output_size.map(|side| side * scale);
         let samples = anti_aliasing.samples;
         if self
             .target

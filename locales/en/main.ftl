@@ -28,6 +28,7 @@ studio-camera-hint =
     Click: select · double-click: frame it
     Delete: remove the selected object
     V: value study on and off
+    P: presentation, only the view (P or Esc to leave)
 studio-drop-hint = Drop a .glb or .gltf file onto the window to add it.
 
 studio-camera = Camera
@@ -245,3 +246,12 @@ ambient-occlusion-strength = Strength
 ambient-occlusion-radius = Radius
 ambient-occlusion-samples = Quality
 ambient-occlusion-samples-hint = Samples per pixel: more is smoother and slower.
+
+export-title = Save the view as a picture
+export-window = PNG, window size…
+export-double = PNG, twice the window…
+export-large = PNG, 4096 px…
+png-file-type = PNG picture
+export-error = Could not save the picture: { $reason }
+toolbar-presentation = Presentation
+toolbar-presentation-hint = Hide every panel and show only the view (P). P or Esc brings them back.
