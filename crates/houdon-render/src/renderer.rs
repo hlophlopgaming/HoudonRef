@@ -150,6 +150,11 @@ struct ObjectUniforms {
     /// x: metallic; y: roughness; z: 1 to use the material, 0 for the
     /// plain colours; w: normal map scale.
     material: [f32; 4],
+    /// Fibre lines: xyz the direction they run, w how many go round (0 for
+    /// none).
+    fibre_axis: [f32; 4],
+    /// xyz: a point on the muscle's middle line.
+    fibre_centre: [f32; 4],
 }
 
 /// One part of one object, as drawn in the last prepared frame.
@@ -434,6 +439,12 @@ impl SceneRenderer {
                     color_above: colors.above.extend(colors.to_y).to_array(),
                     base_color,
                     material: material_params,
+                    fibre_axis: object
+                        .fibres
+                        .map_or([0.0; 4], |f| f.axis.extend(f.lines).to_array()),
+                    fibre_centre: object
+                        .fibres
+                        .map_or([0.0; 4], |f| f.centre.extend(0.0).to_array()),
                 });
                 entries.push(DrawEntry {
                     model_id: object.model_id,

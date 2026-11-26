@@ -13,6 +13,8 @@ struct ObjectUniforms {
     color_above: vec4<f32>,
     base_color: vec4<f32>,
     material: vec4<f32>,
+    fibre_axis: vec4<f32>,
+    fibre_centre: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view: ShadowView;

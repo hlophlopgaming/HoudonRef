@@ -66,11 +66,15 @@ struct ObjectUniforms {
     color_above: vec4<f32>,
     base_color: vec4<f32>,
     material: vec4<f32>,
+    fibre_axis: vec4<f32>,
+    fibre_centre: vec4<f32>,
 };
 // ObjectUniforms, per drawn part: model matrix; its inverse transpose for
 // normals; highlight (rgb, a = amount); plain colours below and above a
 // world height (in a); material base colour; material x = metallic,
-// y = roughness, z = 1 to use the material, w = normal map scale.
+// y = roughness, z = 1 to use the material, w = normal map scale;
+// fibre_axis xyz the direction a muscle's fibres run and w how many lines
+// go round it (0: none); fibre_centre xyz a point on its middle line.
 
 @group(0) @binding(0) var<uniform> u: Globals;
 // One mask per light, white lets the light through.
@@ -253,6 +257,25 @@ fn mask_through(light: Light, world: vec3<f32>) -> f32 {
     return textureSampleLevel(light_masks, light_mask_sampler, uv, i32(layer), 0.0).r;
 }
 
+// Where the muscle's fibre lines fall: 0 between lines, up to 1 on one.
+// The lines run along the fibre axis, evenly spaced round it, and fade out
+// where they would be closer than a pixel or two.
+fn fibre_line(world: vec3<f32>) -> f32 {
+    let count = object.fibre_axis.w;
+    let axis = normalize(object.fibre_axis.xyz + vec3<f32>(0.0, 1e-6, 0.0));
+    let helper = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
+    let u = normalize(cross(axis, helper));
+    let v = cross(axis, u);
+    let d = world - object.fibre_centre.xyz;
+    let around = atan2(dot(d, v), dot(d, u)) / 6.2831853 * count;
+    // Derivatives in uniform control flow: every fragment computes them.
+    let width = fwidth(around);
+    let from_line = abs(fract(around + 0.5) - 0.5);
+    let line = 1.0 - smoothstep(0.08, 0.08 + width, from_line);
+    let fade = 1.0 - smoothstep(0.2, 0.45, width);
+    return select(0.0, line * fade, count > 0.0);
+}
+
 // The shoulder of Khronos PBR Neutral tone mapping: light planes keep
 // their steps instead of all clipping to white. Below the shoulder nothing
 // changes, so shadows keep every value (the curve's toe is left out).
@@ -403,6 +426,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
     let normal_sample = textureSample(normal_texture, material_sampler, in.uv).xyz * 2.0 - 1.0;
     let mapped = normalize(vec3<f32>(normal_sample.xy * object.material.w, normal_sample.z));
     let bumped = perturb_normal(n, in.world_position, in.uv, mapped);
+    let fibres = 1.0 - 0.28 * fibre_line(in.world_position);
 
     let use_material = object.material.z > 0.5;
     let blend = smoothstep(object.color_below.a, object.color_above.a, in.world_position.y);
@@ -421,7 +445,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         if u.shading.x < 2.5 {
             solid = tone_map(solid);
         }
-        solid = geometry_cavity(solid, in.curvature);
+        solid = geometry_cavity(solid, in.curvature) * fibres;
         solid = mix(solid, object.highlight.rgb, object.highlight.a);
         if u.params.y == 1u {
             solid = pow(solid, vec3<f32>(1.0 / 2.2));
@@ -481,7 +505,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @loca
         ambient *= open * open;
         direct *= 1.0 - 0.25 * covered;
     }
-    var color = geometry_cavity(tone_map(direct + ambient), in.curvature);
+    var color = geometry_cavity(tone_map(direct + ambient), in.curvature) * fibres;
     color = mix(color, object.highlight.rgb, object.highlight.a);
     if u.params.y == 1u {
         color = pow(color, vec3<f32>(1.0 / 2.2));
