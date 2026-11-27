@@ -76,6 +76,42 @@ fn see_through_muscles_show_the_bone_under_them() {
 }
 
 #[test]
+fn selecting_the_bone_fades_the_muscle_in_front_and_hovering_tints_lightly() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut view = thigh(LayerState::SHOWN);
+    let plain = centre(&mut renderer, &view);
+    let femur = view.index_of("Femur.l").unwrap();
+    let muscle = view
+        .shown()
+        .map(|s| s.index)
+        .find(|&i| {
+            let id = &view.atlas().structures()[i].id;
+            id.starts_with("Rectus femoris") || id.starts_with("Vastus intermedius")
+        })
+        .unwrap();
+    // The muscle under the pointer: tinted, a little.
+    view.hovered = Some(muscle);
+    let hovered = centre(&mut renderer, &view);
+    view.hovered = None;
+    // The bone selected: the muscle in front fades and the bone shows.
+    view.select(Some(femur));
+    let selected = centre(&mut renderer, &view);
+    let redness = |p: [u8; 4]| i32::from(p[0]) - i32::from(p[1]);
+    assert!(redness(plain) > 40, "muscle in front: {plain:?}");
+    assert!(
+        redness(selected) < redness(plain) - 30,
+        "the bone shows: {plain:?} {selected:?}"
+    );
+    let distance = |a: [u8; 4], b: [u8; 4]| (0..3).map(|i| a[i].abs_diff(b[i]) as u32).sum::<u32>();
+    assert!(
+        distance(plain, hovered) > 3,
+        "a tint: {plain:?} {hovered:?}"
+    );
+}
+
+#[test]
 fn clay_paints_every_structure_alike() {
     let Some(mut renderer) = renderer() else {
         return;

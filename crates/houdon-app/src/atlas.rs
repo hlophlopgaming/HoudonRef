@@ -2,10 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use houdon_core::atlas::ATLAS_MANIFEST;
+use glam::Vec3;
+use houdon_core::atlas::{ATLAS_MANIFEST, StructureIndex};
 use houdon_core::atlas::{DEEP_MUSCLE_SRGB, MASSES, Mass, mass_of};
 use houdon_core::{
-    Atlas, AtlasColors, AtlasPack, AtlasView, CameraPreset, Layer, LayerState, ShadingMode, Side,
+    Atlas, AtlasColors, AtlasPack, AtlasView, CameraFlight, CameraPreset, Layer, LayerState,
+    ShadingMode, Side,
 };
 use houdon_i18n::{Language, Localizer};
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
@@ -63,6 +65,12 @@ pub struct AtlasTab {
     to_studio: Option<(String, Vec<u8>)>,
     /// The structure under the pointer, and where and when it was found.
     hover: Option<Hover>,
+    /// The camera on its way to what was asked to be framed.
+    flight: Option<CameraFlight>,
+    /// Where the selection's label points: the spot clicked on it.
+    anchor: Option<(StructureIndex, Vec3)>,
+    /// Nothing drawn yet: the first framing is a cut, not a flight.
+    first_frame: bool,
 }
 
 struct Hover {
@@ -94,6 +102,9 @@ impl Default for AtlasTab {
             search: String::new(),
             to_studio: None,
             hover: None,
+            flight: None,
+            anchor: None,
+            first_frame: true,
         }
     }
 }
@@ -182,17 +193,41 @@ impl AtlasTab {
             if response.double_clicked() {
                 self.frame_pending = Some(Framing::Selected);
             }
-            match self.frame_pending.take() {
-                Some(Framing::Shown) => view.frame(aspect),
-                Some(Framing::Selected) => view.frame_selected(aspect),
-                Some(Framing::View(index)) => {
-                    if let Some(preset) = CameraPreset::built_ins().get(index) {
-                        view.view_from(preset, aspect);
+            if let Some(framing) = self.frame_pending.take() {
+                let start = view.scene.camera;
+                match framing {
+                    Framing::Shown => view.frame(aspect),
+                    Framing::Selected => view.frame_selected(aspect),
+                    Framing::View(index) => {
+                        if let Some(preset) = CameraPreset::built_ins().get(index) {
+                            view.view_from(preset, aspect);
+                        }
                     }
                 }
-                None => {}
+                // Fly there, unless motion is turned off or nothing is on
+                // screen yet to fly from.
+                let animate = ui.style().animation_time > 0.0;
+                if animate && !self.first_frame {
+                    self.flight = Some(CameraFlight::new(start, view.scene.camera));
+                    view.scene.camera = start;
+                }
             }
+            self.first_frame = false;
+            if let Some(flight) = &mut self.flight {
+                let seconds = ui.input(|i| i.stable_dt).min(0.1);
+                view.scene.camera = flight.advance(seconds);
+                if flight.finished() {
+                    self.flight = None;
+                } else {
+                    ui.ctx().request_repaint();
+                }
+            }
+            let placed = view.scene.camera;
             drive_camera(&mut view.scene.camera, ui, &response, rect);
+            if view.scene.camera != placed {
+                // The artist took the camera: stop flying it.
+                self.flight = None;
+            }
             let ray = |view: &AtlasView, pointer: egui::Pos2| {
                 let ndc_x = (pointer.x - rect.left()) / rect.width() * 2.0 - 1.0;
                 let ndc_y = 1.0 - (pointer.y - rect.top()) / rect.height() * 2.0;
@@ -213,7 +248,9 @@ impl AtlasTab {
                             index: view.pick(origin, direction),
                         });
                     }
-                    if let Some(index) = self.hover.as_ref().and_then(|h| h.index) {
+                    view.hovered = self.hover.as_ref().and_then(|h| h.index);
+                    // The selection is named by its label already.
+                    if let Some(index) = view.hovered.filter(|&i| view.selected() != Some(i)) {
                         let structure = &view.atlas().structures()[index];
                         let name = display_name(structure, tr);
                         let latin = structure.latin.clone();
@@ -225,7 +262,10 @@ impl AtlasTab {
                         });
                     }
                 }
-                None => self.hover = None,
+                None => {
+                    self.hover = None;
+                    view.hovered = None;
+                }
             }
             if !ui.ctx().egui_wants_keyboard_input() {
                 let (f, h, i, escape) = ui.input(|input| {
@@ -261,8 +301,9 @@ impl AtlasTab {
                 && let Some(pointer) = response.interact_pointer_pos()
             {
                 let (origin, direction) = ray(view, pointer);
-                let hit = view.pick(origin, direction);
-                view.select(hit);
+                let hit = view.pick_hit(origin, direction);
+                view.select(hit.map(|(index, _)| index));
+                self.anchor = hit.map(|(index, t)| (index, origin + direction * t));
             }
             let painter = ui.painter_at(rect);
             let [r, g, b] = view.scene.room.backdrop_srgb();
@@ -278,8 +319,149 @@ impl AtlasTab {
                     anti_aliasing: self.anti_aliasing,
                 },
             ));
+            if let Some(index) = view.selected() {
+                let anchor = match self.anchor {
+                    Some((clicked, point)) if clicked == index => point,
+                    _ => view.atlas().structures()[index].model.bounds.center(),
+                };
+                let screen = view_projection(view, aspect, rect, anchor);
+                if let Some(screen) = screen
+                    && let Some(action) = callout(ui, tr, view, index, screen, rect)
+                {
+                    match action {
+                        CalloutAction::Isolate => {
+                            view.isolate([index]);
+                            self.frame_pending = Some(Framing::Selected);
+                        }
+                        CalloutAction::Hide => view.hide(index),
+                        CalloutAction::Frame => self.frame_pending = Some(Framing::Selected),
+                        CalloutAction::Close => view.select(None),
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
         });
     }
+}
+
+/// Where a point of the body falls in the viewport, or `None` behind the
+/// eye.
+fn view_projection(
+    view: &AtlasView,
+    aspect: f32,
+    rect: egui::Rect,
+    point: Vec3,
+) -> Option<egui::Pos2> {
+    let clip = view.scene.camera.view_projection(aspect) * point.extend(1.0);
+    if clip.w <= 1e-6 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some(egui::pos2(
+        rect.left() + (ndc.x * 0.5 + 0.5) * rect.width(),
+        rect.top() + (0.5 - ndc.y * 0.5) * rect.height(),
+    ))
+}
+
+/// What the selection's label was asked to do.
+enum CalloutAction {
+    Isolate,
+    Hide,
+    Frame,
+    Close,
+}
+
+/// How far the label sits from the spot it names, points: up and to the
+/// side, clear of the structure itself.
+const CALLOUT_OFFSET: egui::Vec2 = egui::vec2(72.0, -56.0);
+
+/// The selection's name on a label pinned to the body by a leader line, so
+/// the name is read where the eye already is, with what to do with it.
+fn callout(
+    ui: &mut egui::Ui,
+    tr: &Localizer,
+    view: &AtlasView,
+    index: StructureIndex,
+    anchor: egui::Pos2,
+    rect: egui::Rect,
+) -> Option<CalloutAction> {
+    let structure = &view.atlas().structures()[index];
+    // To the right of the spot, unless that runs off the viewport.
+    let right = anchor.x + CALLOUT_OFFSET.x + 220.0 < rect.right();
+    let offset = if right {
+        CALLOUT_OFFSET
+    } else {
+        egui::vec2(-CALLOUT_OFFSET.x, CALLOUT_OFFSET.y)
+    };
+    let pivot = if right {
+        egui::Align2::LEFT_CENTER
+    } else {
+        egui::Align2::RIGHT_CENTER
+    };
+    let mut action = None;
+    let shown = egui::Area::new(egui::Id::unique("atlas_callout"))
+        .order(egui::Order::Foreground)
+        .constrain_to(rect.shrink(8.0))
+        .pivot(pivot)
+        .fixed_pos(anchor + offset)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(260.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(display_name(structure, tr))
+                                .strong()
+                                .size(15.0),
+                        )
+                        .wrap(),
+                    );
+                    if ui
+                        .small_button("×")
+                        .on_hover_text(tr.tr("atlas-callout-close"))
+                        .clicked()
+                    {
+                        action = Some(CalloutAction::Close);
+                    }
+                });
+                if let Some(latin) = &structure.latin {
+                    ui.label(egui::RichText::new(latin).italics().weak());
+                }
+                if let Some(mass) = mass_of(structure) {
+                    ui.weak(tr.tr_args(
+                        "atlas-mass-of",
+                        &[("mass", tr.tr(&mass_message_id(mass)).into())],
+                    ));
+                }
+                ui.horizontal(|ui| {
+                    if ui.small_button(tr.tr("atlas-frame-selected")).clicked() {
+                        action = Some(CalloutAction::Frame);
+                    }
+                    if ui.small_button(tr.tr("atlas-isolate")).clicked() {
+                        action = Some(CalloutAction::Isolate);
+                    }
+                    if ui.small_button(tr.tr("atlas-hide")).clicked() {
+                        action = Some(CalloutAction::Hide);
+                    }
+                });
+            });
+        });
+    // The leader runs from the spot to the near side of the label.
+    let label = shown.response.rect;
+    let end = if label.center().x >= anchor.x {
+        label.left_center()
+    } else {
+        label.right_center()
+    };
+    let painter = ui.painter_at(rect);
+    // Dark ink with a light rim, like the outlines: it reads on the page
+    // and on any colour of the body.
+    let ink = egui::Color32::from_rgb(40, 30, 26);
+    let rim = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 170);
+    painter.line_segment([anchor, end], egui::Stroke::new(3.0, rim));
+    painter.line_segment([anchor, end], egui::Stroke::new(1.5, ink));
+    painter.circle(anchor, 3.5, ink, egui::Stroke::new(1.5, rim));
+    action
 }
 
 /// The side panel: search, the selection, layers, shading, the list of
@@ -429,6 +611,7 @@ fn panel(
             }
         });
         ui.checkbox(&mut view.show_fibres, tr.tr("atlas-fibres"));
+        ui.checkbox(&mut view.fade_others, tr.tr("atlas-fade-others"));
         let shading = &mut view.scene.shading;
         ui.checkbox(&mut shading.lines.contours, tr.tr("atlas-outlines"));
         ui.horizontal(|ui| {

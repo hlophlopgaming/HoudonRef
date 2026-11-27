@@ -16,7 +16,7 @@ use crate::light_mask::MaskTextures;
 use crate::matcap::MatcapTexture;
 use crate::material::MaterialResources;
 use crate::shadow::{ShadowLayout, ShadowResources};
-use crate::{Frame, FrameObject, FrameSurface, ObjectColors};
+use crate::{Frame, FrameObject, FrameSurface, Highlight, ObjectColors};
 
 /// Roughness of plain colours (Clay, Random, the room): matte.
 const PLAIN_ROUGHNESS: f32 = 0.9;
@@ -24,6 +24,9 @@ const PLAIN_ROUGHNESS: f32 = 0.9;
 /// Colour mixed into a selected object, linear, and how much of it. A cool
 /// interface blue, so the highlight is not mistaken for a material.
 const SELECTION_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.35];
+
+/// The same colour, fainter, on what is under the pointer.
+const HOVER_COLOR: [f32; 4] = [0.15, 0.45, 1.0, 0.15];
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -430,10 +433,10 @@ impl SceneRenderer {
                 uniforms.push(ObjectUniforms {
                     model: object.transform.to_cols_array_2d(),
                     normal: object.transform.inverse().transpose().to_cols_array_2d(),
-                    highlight: if object.selected {
-                        SELECTION_COLOR
-                    } else {
-                        [0.0; 4]
+                    highlight: match object.highlight {
+                        Highlight::Selected => SELECTION_COLOR,
+                        Highlight::Hovered => HOVER_COLOR,
+                        Highlight::None => [0.0; 4],
                     },
                     color_below: colors.below.extend(colors.from_y).to_array(),
                     color_above: colors.above.extend(colors.to_y).to_array(),

@@ -40,6 +40,16 @@ pub enum FrameSurface {
     Materials,
 }
 
+/// How strongly an object is marked out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Highlight {
+    #[default]
+    None,
+    /// Under the pointer: a faint tint, a hint of what a click selects.
+    Hovered,
+    Selected,
+}
+
 /// One object to draw.
 #[derive(Clone)]
 pub struct FrameObject {
@@ -48,8 +58,8 @@ pub struct FrameObject {
     pub model: Arc<Model>,
     pub transform: Mat4,
     pub surface: FrameSurface,
-    /// Drawn with the selection highlight.
-    pub selected: bool,
+    /// How strongly it is marked out: selected, under the pointer or not.
+    pub highlight: Highlight,
     /// Drawn only from the side its normals face, like the room's inside.
     pub one_sided: bool,
     /// Casts shadows; the room only receives them.
@@ -110,7 +120,7 @@ impl Frame {
                             from_y: cove * 0.2,
                             to_y: cove,
                         }),
-                        selected: false,
+                        highlight: Highlight::None,
                         one_sided: true,
                         casts_shadows: false,
                         opacity: 1.0,
@@ -127,7 +137,11 @@ impl Frame {
                     Surface::Materials => FrameSurface::Materials,
                     Surface::Plain(color) => FrameSurface::Colors(ObjectColors::uniform(color)),
                 },
-                selected: scene.selected() == Some(object.id),
+                highlight: if scene.selected() == Some(object.id) {
+                    Highlight::Selected
+                } else {
+                    Highlight::None
+                },
                 one_sided: false,
                 casts_shadows: true,
                 opacity: 1.0,
@@ -168,7 +182,13 @@ impl Frame {
                 model: Arc::clone(&shown.structure.model),
                 transform: Mat4::IDENTITY,
                 surface: FrameSurface::Colors(ObjectColors::uniform(color)),
-                selected: shown.selected,
+                highlight: if shown.selected {
+                    Highlight::Selected
+                } else if shown.hovered {
+                    Highlight::Hovered
+                } else {
+                    Highlight::None
+                },
                 one_sided: false,
                 // A see-through layer would darken what it shows.
                 casts_shadows: shown.opacity >= 1.0,

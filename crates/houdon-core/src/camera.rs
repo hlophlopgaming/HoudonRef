@@ -124,6 +124,62 @@ impl OrbitCamera {
     }
 }
 
+/// A smooth move of the camera from one view to another, so the eye
+/// follows where it goes instead of being cut to a new picture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraFlight {
+    from: OrbitCamera,
+    to: OrbitCamera,
+    elapsed: f32,
+}
+
+impl CameraFlight {
+    /// How long a flight takes, seconds.
+    pub const DURATION: f32 = 0.5;
+
+    pub fn new(from: OrbitCamera, to: OrbitCamera) -> Self {
+        Self {
+            from,
+            to,
+            elapsed: 0.0,
+        }
+    }
+
+    /// Where the flight ends.
+    pub fn destination(&self) -> OrbitCamera {
+        self.to
+    }
+
+    /// Moves on by `seconds`; returns the camera for this moment.
+    pub fn advance(&mut self, seconds: f32) -> OrbitCamera {
+        self.elapsed = (self.elapsed + seconds.max(0.0)).min(Self::DURATION);
+        let progress = self.elapsed / Self::DURATION;
+        // Fast at first, settling gently.
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        between(&self.from, &self.to, eased)
+    }
+
+    pub fn finished(&self) -> bool {
+        self.elapsed >= Self::DURATION
+    }
+}
+
+/// The camera a fraction `t` of the way from `a` to `b`: the shorter way
+/// round, and the distance changing by the same ratio at every step, so
+/// a close-up does not rush in at the end.
+fn between(a: &OrbitCamera, b: &OrbitCamera, t: f32) -> OrbitCamera {
+    use std::f32::consts::{PI, TAU};
+    let turn = (b.yaw - a.yaw + PI).rem_euclid(TAU) - PI;
+    let ratio = b.distance / a.distance.max(f32::MIN_POSITIVE);
+    OrbitCamera {
+        target: a.target.lerp(b.target, t),
+        yaw: (a.yaw + turn * t).rem_euclid(TAU),
+        pitch: a.pitch + (b.pitch - a.pitch) * t,
+        distance: a.distance * ratio.powf(t),
+        focal_length_mm: a.focal_length_mm + (b.focal_length_mm - a.focal_length_mm) * t,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +238,42 @@ mod tests {
         let after = cam.distance * (cam.vertical_fov() * 0.5).tan();
         // Visible height at the target stays about the same.
         assert!((before - after).abs() / before < 0.01);
+    }
+
+    #[test]
+    fn a_flight_starts_where_it_was_and_lands_where_asked() {
+        let from = OrbitCamera::default();
+        let to = OrbitCamera {
+            target: Vec3::new(0.3, 1.5, 0.1),
+            yaw: 1.0,
+            pitch: 0.4,
+            distance: 0.5,
+            focal_length_mm: 85.0,
+        };
+        let mut flight = CameraFlight::new(from, to);
+        assert_eq!(flight.advance(0.0), from);
+        assert!(!flight.finished());
+        let middle = flight.advance(CameraFlight::DURATION * 0.5);
+        assert!(middle.distance < from.distance && middle.distance > to.distance);
+        let end = flight.advance(1.0);
+        assert!(flight.finished());
+        assert!(end.target.distance(to.target) < 1e-5);
+        assert!((end.yaw - to.yaw).abs() < 1e-5);
+        assert!((end.distance - to.distance).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_flight_turns_the_short_way_round() {
+        let from = OrbitCamera {
+            yaw: 0.1,
+            ..OrbitCamera::default()
+        };
+        let to = OrbitCamera {
+            yaw: std::f32::consts::TAU - 0.1,
+            ..OrbitCamera::default()
+        };
+        let middle = between(&from, &to, 0.5);
+        // Through 0, not through half a turn.
+        assert!(middle.yaw < 0.01 || middle.yaw > std::f32::consts::TAU - 0.01);
     }
 }

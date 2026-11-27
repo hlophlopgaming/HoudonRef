@@ -20,7 +20,7 @@ pub use atlas::{
     Atlas, AtlasColors, AtlasError, AtlasPack, AtlasView, BodySystem, Layer, LayerState,
     ShownStructure, Side, Structure, Tissue, TranslatedName,
 };
-pub use camera::OrbitCamera;
+pub use camera::{CameraFlight, OrbitCamera};
 pub use light::{Light, LightId, LightKind, MAX_SHADOW_ANGLE};
 pub use light_preset::{LightPreset, LightPresetError};
 pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
