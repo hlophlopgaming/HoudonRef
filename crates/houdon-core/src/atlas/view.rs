@@ -18,8 +18,10 @@ pub type StructureIndex = usize;
 pub enum Layer {
     /// Bones, teeth and the cartilage of the skeleton.
     Bones,
-    /// Muscles and their tendons.
+    /// Surface muscles and their tendons.
     Muscles,
+    /// Muscles usually covered by the surface forms; off at first.
+    DeepMuscles,
     /// The sheets around muscles and the bursae between them, which would
     /// hide the muscles' forms; off at first.
     Fasciae,
@@ -28,13 +30,28 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub const ALL: [Self; 4] = [Self::Bones, Self::Muscles, Self::Fasciae, Self::Joints];
+    pub const ALL: [Self; 5] = [
+        Self::Bones,
+        Self::Muscles,
+        Self::DeepMuscles,
+        Self::Fasciae,
+        Self::Joints,
+    ];
 
     /// The layer a structure is shown with.
     pub fn of(structure: &Structure) -> Self {
         match (structure.system, structure.tissue) {
             (BodySystem::Joints, _) => Self::Joints,
-            (_, Tissue::Muscle | Tissue::Tendon) => Self::Muscles,
+            (_, Tissue::Muscle | Tissue::Tendon) => {
+                if DEEP_MUSCLES
+                    .iter()
+                    .any(|&name| structure.name.starts_with(name))
+                {
+                    Self::DeepMuscles
+                } else {
+                    Self::Muscles
+                }
+            }
             (_, Tissue::Fascia | Tissue::Bursa) => Self::Fasciae,
             (_, Tissue::Ligament | Tissue::Capsule | Tissue::Fat) => Self::Joints,
             (BodySystem::Skeletal, _) => Self::Bones,
@@ -46,6 +63,26 @@ impl Layer {
         self as usize
     }
 }
+
+// Hide the covered forms that can interrupt the surface masses. Some deeper
+// muscles, such as the soleus, still contribute to the silhouette.
+const DEEP_MUSCLES: &[&str] = &[
+    "Brachialis muscle",
+    "Coracobrachialis muscle",
+    "Deep head of pronator teres",
+    "Flexor digitorum profundus",
+    "Flexor pollicis longus",
+    "Gluteus minimus muscle",
+    "Internal abdominal oblique muscle",
+    "Medial head of triceps brachii",
+    "Pectoralis minor muscle",
+    "Pronator quadratus",
+    "Serratus posterior",
+    "Subscapularis muscle",
+    "Supinator muscle",
+    "Transversus abdominis muscle",
+    "Vastus intermedius muscle",
+];
 
 /// How a layer is shown.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,7 +197,7 @@ pub struct AtlasView {
     atlas: Atlas,
     /// The GPU cache key of each structure's model, in the atlas's order.
     model_ids: Vec<ModelId>,
-    layers: [LayerState; 4],
+    layers: [LayerState; Layer::ALL.len()],
     bounds: Bounds,
     selected: Option<StructureIndex>,
     /// Hidden one by one; a hidden structure hides its parts too.
@@ -198,12 +235,10 @@ impl AtlasView {
         let mut scene = Scene::new();
         // A plain backdrop: the room is sized for the Studio's objects.
         scene.room.visible = false;
-        // A light page, as in a book of anatomy for artists: the studio
-        // light without cast shadows, clean outlines between forms.
+        // A light page and even lighting let the forms read while orbiting.
         scene.room.backdrop_color = Vec3::splat(0.72);
         scene.shading.mode = crate::ShadingMode::Solid;
         scene.shading.solid = crate::SolidLighting::Studio;
-        scene.shading.lines.contours = true;
         scene.shading.lines.color = Vec3::new(0.10, 0.07, 0.06);
         // Outlines only: the meshes' fine folds and thin layers lying on
         // each other would scatter fold lines like dirt.
@@ -216,13 +251,14 @@ impl AtlasView {
                 LayerState::SHOWN,
                 LayerState::HIDDEN,
                 LayerState::HIDDEN,
+                LayerState::HIDDEN,
             ],
             bounds,
             selected: None,
             hidden: HashSet::new(),
             isolated: None,
             colors: AtlasColors::default(),
-            show_fibres: true,
+            show_fibres: false,
             emphasis: None,
             hovered: None,
             fade_others: true,
@@ -561,6 +597,7 @@ mod tests {
         };
         assert!(count(Layer::Bones) > 250);
         assert!(count(Layer::Muscles) > 400);
+        assert!(count(Layer::DeepMuscles) > 20);
         assert!(count(Layer::Fasciae) > 100);
         assert!(count(Layer::Joints) > 300);
         let femur = atlas.structure("Femur.l").unwrap();
@@ -709,6 +746,7 @@ mod tests {
     #[test]
     fn selecting_fades_the_rest_and_keeps_the_selection_solid() {
         let mut view = AtlasView::new(human());
+        view.show_fibres = true;
         let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
         let femur = view.index_of("Femur.l").unwrap();
         let opacity = |view: &AtlasView, i| view.shown().find(|s| s.index == i).unwrap().opacity;
@@ -804,18 +842,28 @@ mod tests {
     }
 
     #[test]
-    fn the_view_opens_like_a_page_of_an_anatomy_book() {
+    fn the_view_opens_on_the_surface_without_line_overlays() {
         let mut view = AtlasView::new(human());
         assert_eq!(view.scene.shading.mode, crate::ShadingMode::Solid);
-        assert!(view.scene.shading.lines.contours);
+        assert!(!view.scene.shading.lines.contours);
         assert!(view.scene.room.backdrop_color.x > 0.5, "a light page");
         let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
+        let brachialis = view.index_of("Brachialis muscle.l").unwrap();
         let femur = view.index_of("Femur.l").unwrap();
+        let is_shown = |view: &AtlasView, i| view.shown().any(|s| s.index == i);
+        assert!(is_shown(&view, biceps));
+        assert!(!is_shown(&view, brachialis));
+        view.set_layer(Layer::DeepMuscles, LayerState::SHOWN);
+        assert!(is_shown(&view, brachialis));
+        view.set_layer(Layer::Muscles, LayerState::HIDDEN);
+        assert!(!is_shown(&view, biceps));
+        assert!(is_shown(&view, brachialis));
+        view.set_layer(Layer::Muscles, LayerState::SHOWN);
         let fibres = |view: &AtlasView, i| view.shown().find(|s| s.index == i).unwrap().fibres;
+        assert!(fibres(&view, biceps).is_none());
+        view.show_fibres = true;
         assert!(fibres(&view, biceps).is_some());
         assert!(fibres(&view, femur).is_none());
-        view.show_fibres = false;
-        assert!(fibres(&view, biceps).is_none());
         // The legend points at a mass: its muscles light up, no others.
         let mass = mass_of(&view.atlas().structures()[biceps]).unwrap();
         view.emphasis = Some(mass);

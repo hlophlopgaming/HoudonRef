@@ -479,6 +479,7 @@ fn panel(
             view.show_all();
             view.set_layer(Layer::Bones, LayerState::SHOWN);
             view.set_layer(Layer::Muscles, LayerState::SHOWN);
+            view.set_layer(Layer::DeepMuscles, LayerState::HIDDEN);
             view.colors = AtlasColors::Masses;
             framing = Some(Framing::Shown);
         }
@@ -486,6 +487,7 @@ fn panel(
             view.show_all();
             view.set_layer(Layer::Bones, LayerState::SHOWN);
             view.set_layer(Layer::Muscles, LayerState::HIDDEN);
+            view.set_layer(Layer::DeepMuscles, LayerState::HIDDEN);
             view.colors = AtlasColors::Natural;
             framing = Some(Framing::Shown);
         }
@@ -511,7 +513,7 @@ fn panel(
                 .selectable_label(view.selected() == Some(index), name)
                 .clicked()
             {
-                view.select(Some(index));
+                select_list_entry(view, index);
                 framing = Some(Framing::Selected);
             }
         }
@@ -727,13 +729,22 @@ fn structure_list(
                             .selectable_label(view.selected() == Some(index), name)
                             .clicked()
                         {
-                            view.select(Some(index));
+                            select_list_entry(view, index);
                             *framing = Some(Framing::Selected);
                         }
                     });
                 }
             });
     }
+}
+
+fn select_list_entry(view: &mut AtlasView, index: StructureIndex) {
+    if Layer::of(&view.atlas().structures()[index]) == Layer::DeepMuscles
+        && !view.layer(Layer::DeepMuscles).visible
+    {
+        view.isolate([index]);
+    }
+    view.select(Some(index));
 }
 
 /// The selection, or what is shown, as a model for the Studio, named for
@@ -769,6 +780,7 @@ fn layer_message_id(layer: Layer) -> &'static str {
     match layer {
         Layer::Bones => "atlas-layer-bones",
         Layer::Muscles => "atlas-layer-muscles",
+        Layer::DeepMuscles => "atlas-layer-deep-muscles",
         Layer::Fasciae => "atlas-layer-fasciae",
         Layer::Joints => "atlas-layer-joints",
     }
