@@ -112,6 +112,32 @@ fn selecting_the_bone_fades_the_muscle_in_front_and_hovering_tints_lightly() {
 }
 
 #[test]
+fn the_low_back_shows_the_pale_aponeurosis_not_the_muscle_colour() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut view = AtlasView::new(human());
+    // From behind, close on the low back, beside the spine.
+    view.scene.camera.target = glam::Vec3::new(0.02, 0.975, 0.0);
+    view.scene.camera.distance = 0.35;
+    view.scene.camera.yaw = std::f32::consts::PI;
+    view.scene.camera.pitch = 0.0;
+    let latissimus = view.atlas().structure("Latissimus dorsi muscle.l").unwrap();
+    let belly = view.tissue_color(latissimus, houdon_core::Tissue::Muscle);
+    let pixel = centre(&mut renderer, &view);
+    let channel = |p: [u8; 4], i: usize| i32::from(p[i]);
+    // The latissimus's colour is saturated; the aponeurosis is near grey.
+    let spread = |p: [u8; 4]| {
+        (0..3).map(|i| channel(p, i)).max().unwrap() - (0..3).map(|i| channel(p, i)).min().unwrap()
+    };
+    assert!(
+        belly.max_element() - belly.min_element() > 0.1,
+        "a coloured mass: {belly}"
+    );
+    assert!(spread(pixel) < 40, "pale over the low back: {pixel:?}");
+}
+
+#[test]
 fn clay_paints_every_structure_alike() {
     let Some(mut renderer) = renderer() else {
         return;

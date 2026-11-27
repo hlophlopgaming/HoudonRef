@@ -7,7 +7,7 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use serde::Deserialize;
 
-use crate::Model;
+use crate::{Material, MeshPart, Model};
 
 mod export;
 mod fibres;
@@ -65,7 +65,12 @@ pub struct Structure {
     pub name: String,
     pub side: Side,
     pub system: BodySystem,
+    /// What most of it is made of.
     pub tissue: Tissue,
+    /// Every tissue it is made of, `tissue` first: a muscle's belly and
+    /// its tendon. Each part of the model has the index of its tissue
+    /// here as its material, and the model has a material per tissue.
+    pub tissues: Vec<Tissue>,
     /// The Latin term, where the source has one.
     pub latin: Option<String>,
     /// The id of the structure this one is part of, if any.
@@ -100,6 +105,8 @@ pub enum AtlasError {
     ShortFile(String),
     #[error("atlas structure {0} refers to an unknown mesh")]
     UnknownMesh(String),
+    #[error("the tissues of atlas mesh {0} do not add up to its triangles")]
+    Runs(usize),
     #[error("invalid atlas names: {0}")]
     Names(ron::error::SpannedError),
 }
@@ -120,6 +127,10 @@ struct MeshEntry {
     wide: bool,
     min: (f32, f32, f32),
     max: (f32, f32, f32),
+    /// For a mesh of several tissues, its runs of triangles in order:
+    /// how many, and of what. Empty when it is all one tissue.
+    #[serde(default)]
+    runs: Vec<(usize, Tissue)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,7 +198,14 @@ impl AtlasPack {
             .manifest
             .meshes
             .iter()
-            .map(|mesh| read_mesh(mesh, &data[&mesh.file]))
+            .enumerate()
+            .map(|(index, mesh)| {
+                let runs: usize = mesh.runs.iter().map(|&(count, _)| count).sum();
+                if !mesh.runs.is_empty() && runs != mesh.triangles {
+                    return Err(AtlasError::Runs(index));
+                }
+                read_mesh(mesh, &data[&mesh.file])
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let structures = self
             .manifest
@@ -197,14 +215,18 @@ impl AtlasPack {
                 let (positions, indices) = meshes
                     .get(entry.mesh)
                     .ok_or_else(|| AtlasError::UnknownMesh(entry.id.clone()))?;
+                let runs = &self.manifest.meshes[entry.mesh].runs;
                 let (name, side) = split_side(&entry.id);
+                let mut model = placed(&entry.id, positions, indices, entry.matrix);
+                let tissues = split_tissues(&mut model, entry.tissue, runs);
                 Ok(Structure {
-                    model: Arc::new(placed(&entry.id, positions, indices, entry.matrix)),
+                    model: Arc::new(model),
                     id: entry.id.clone(),
                     name,
                     side,
                     system: entry.system,
                     tissue: entry.tissue,
+                    tissues,
                     latin: entry.latin.clone(),
                     parent: entry.parent.clone(),
                     russian: russian.get(&split_side(&entry.id).0).cloned(),
@@ -280,6 +302,51 @@ fn read_mesh(mesh: &MeshEntry, data: &[u8]) -> Result<(Vec<Vec3>, Vec<u32>), Atl
     Ok((positions, indices))
 }
 
+/// Splits `model` into a part per run of one tissue, each part's material
+/// the index of its tissue in the list returned, `main` first.
+fn split_tissues(model: &mut Model, main: Tissue, runs: &[(usize, Tissue)]) -> Vec<Tissue> {
+    let mut tissues = vec![main];
+    let mut parts = Vec::new();
+    let mut first_index = 0;
+    for &(triangles, tissue) in runs {
+        let material = tissues
+            .iter()
+            .position(|&t| t == tissue)
+            .unwrap_or_else(|| {
+                tissues.push(tissue);
+                tissues.len() - 1
+            });
+        let index_count = (triangles * 3) as u32;
+        parts.push(MeshPart {
+            first_index,
+            index_count,
+            material: Some(material),
+        });
+        first_index += index_count;
+    }
+    if parts.is_empty() {
+        for part in &mut model.parts {
+            part.material = Some(0);
+        }
+    } else {
+        model.parts = parts;
+    }
+    model.materials = tissues
+        .iter()
+        .map(|tissue| Material {
+            name: format!("{tissue:?}"),
+            base_color: tissue.natural_color().extend(1.0),
+            base_color_texture: None,
+            metallic: 0.0,
+            roughness: 0.7,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            normal_scale: 1.0,
+        })
+        .collect();
+    tissues
+}
+
 /// The mesh moved into place. A mirrored placement turns the triangles
 /// round so they still face outwards.
 fn placed(id: &str, positions: &[Vec3], indices: &[u32], matrix: [f32; 16]) -> Model {
@@ -337,6 +404,30 @@ pub(crate) mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), atlas.structures().len(), "ids are unique");
+    }
+
+    #[test]
+    fn a_muscle_keeps_its_tendon_as_a_part_of_its_own() {
+        let atlas = human();
+        let latissimus = atlas.structure("Latissimus dorsi muscle.r").unwrap();
+        assert_eq!(latissimus.tissues, [Tissue::Muscle, Tissue::Tendon]);
+        let model = &latissimus.model;
+        let materials: Vec<_> = model.parts.iter().map(|p| p.material).collect();
+        assert_eq!(materials, [Some(0), Some(1)]);
+        let covered: u32 = model.parts.iter().map(|p| p.index_count).sum();
+        assert_eq!(covered as usize, model.indices.len());
+        assert_eq!(model.materials.len(), 2);
+        // The femur's ends are capped with cartilage.
+        let femur = atlas.structure("Femur.l").unwrap();
+        assert_eq!(femur.tissues, [Tissue::Bone, Tissue::Cartilage]);
+        // All one tissue: one part.
+        let single = atlas
+            .structures()
+            .iter()
+            .find(|s| s.tissues.len() == 1)
+            .unwrap();
+        assert_eq!(single.model.parts.len(), 1);
+        assert_eq!(single.model.parts[0].material, Some(0));
     }
 
     #[test]

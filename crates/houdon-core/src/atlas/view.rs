@@ -462,21 +462,31 @@ impl AtlasView {
         }
     }
 
-    /// The colour `structure` is drawn in, linear RGB.
+    /// The colour `structure` is drawn in, linear RGB: that of its main
+    /// tissue.
     pub fn color(&self, structure: &Structure) -> Vec3 {
+        self.tissue_color(structure, structure.tissue)
+    }
+
+    /// The colour of the part of `structure` made of `tissue`, linear RGB.
+    /// Only a muscle's belly takes its mass's colour: its tendon and
+    /// aponeurosis stay pale, as the book draws them.
+    pub fn tissue_color(&self, structure: &Structure, tissue: Tissue) -> Vec3 {
         match self.colors {
             AtlasColors::Clay => self.scene.shading.clay_color,
-            AtlasColors::Natural => structure.tissue.natural_color(),
+            AtlasColors::Natural => tissue.natural_color(),
             AtlasColors::Bones => match skull_color(structure) {
-                Some(srgb) => Vec3::from(srgb.map(|c| (f32::from(c) / 255.0).powf(2.2))),
-                None => structure.tissue.natural_color(),
+                Some(srgb) if tissue == structure.tissue => {
+                    Vec3::from(srgb.map(|c| (f32::from(c) / 255.0).powf(2.2)))
+                }
+                _ => tissue.natural_color(),
             },
-            AtlasColors::Masses => match (mass_of(structure), structure.tissue) {
-                (Some(mass), _) => mass.color(),
+            AtlasColors::Masses => match (mass_of(structure), tissue) {
+                (Some(mass), Tissue::Muscle) => mass.color(),
                 (None, Tissue::Muscle) => {
                     Vec3::from(DEEP_MUSCLE_SRGB.map(|c| (f32::from(c) / 255.0).powf(2.2)))
                 }
-                (None, tissue) => tissue.natural_color(),
+                (_, tissue) => tissue.natural_color(),
             },
         }
     }
@@ -754,6 +764,28 @@ mod tests {
             .map(|s| s.index)
             .collect();
         assert_eq!(hovered, [biceps]);
+    }
+
+    #[test]
+    fn a_muscle_takes_its_mass_colour_and_its_tendon_stays_pale() {
+        let mut view = AtlasView::new(human());
+        let latissimus = view
+            .atlas()
+            .structure("Latissimus dorsi muscle.l")
+            .unwrap()
+            .clone();
+        let mass = mass_of(&latissimus).unwrap();
+        assert_eq!(view.tissue_color(&latissimus, Tissue::Muscle), mass.color());
+        assert_eq!(
+            view.tissue_color(&latissimus, Tissue::Tendon),
+            Tissue::Tendon.natural_color()
+        );
+        view.colors = AtlasColors::Clay;
+        assert_eq!(
+            view.tissue_color(&latissimus, Tissue::Tendon),
+            view.tissue_color(&latissimus, Tissue::Muscle),
+            "clay is one colour"
+        );
     }
 
     #[test]

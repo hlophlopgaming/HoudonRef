@@ -9,7 +9,8 @@ Input: a directory with `skeletal.glb`, `muscular.glb`, `joints.glb` and
 Output, into `assets/atlas/human/`:
 
 - `atlas.ron`: the manifest. One entry per mesh (where its bytes are, its
-  bounds) and one per structure (its Z-Anatomy name, system, tissue, mesh,
+  bounds and, when it mixes tissues, which runs of triangles are which:
+  a muscle's belly and its tendon) and one per structure (its Z-Anatomy name, system, tissue, mesh,
   placement and Latin term).
 - `<system>.bin`: each mesh's positions, quantised to 16 bits within the
   mesh's bounds, then its triangle indices (16 or 32 bits).
@@ -76,11 +77,12 @@ def view_bytes(document, binary, index):
 
 
 def decode_mesh(document, binary, mesh):
-    """All primitives of `mesh` as one: positions, triangles and the tissue
-    of its largest primitive."""
+    """All primitives of `mesh` as one: positions, triangles, the tissue
+    of its largest primitive and the runs of triangles of one tissue, in
+    order, as (triangle count, tissue)."""
     import DracoPy
 
-    positions, triangles = [], []
+    positions, triangles, runs = [], [], []
     largest, tissue = -1, None
     for primitive in mesh["primitives"]:
         draco = primitive.get("extensions", {}).get("KHR_draco_mesh_compression")
@@ -92,13 +94,18 @@ def decode_mesh(document, binary, mesh):
         base = len(positions)
         positions.extend(points)
         triangles.extend((a + base, b + base, c + base) for a, b, c in faces)
+        material = document["materials"][primitive.get("material", 0)]["name"]
+        own = TISSUES.get(material)
+        if own is None:
+            raise ValueError(f"unknown material {material!r}")
+        if runs and runs[-1][1] == own:
+            runs[-1] = (runs[-1][0] + len(faces), own)
+        else:
+            runs.append((len(faces), own))
         if len(faces) > largest:
             largest = len(faces)
-            material = document["materials"][primitive.get("material", 0)]["name"]
-            tissue = TISSUES.get(material)
-            if tissue is None:
-                raise ValueError(f"unknown material {material!r}")
-    return positions, triangles, tissue
+            tissue = own
+    return positions, triangles, tissue, runs
 
 
 def quaternion_matrix(q):
@@ -189,7 +196,7 @@ def build(source, out):
                 continue
             source_mesh = node["mesh"]
             if source_mesh not in mesh_ids:
-                positions, triangles, tissue = decode_mesh(
+                positions, triangles, tissue, runs = decode_mesh(
                     document, binary, document["meshes"][source_mesh]
                 )
                 quantised, lo, hi = quantise(positions)
@@ -213,6 +220,7 @@ def build(source, out):
                         "wide": wide,
                         "min": lo,
                         "max": hi,
+                        "runs": runs if len(runs) > 1 else [],
                     }
                 )
             name = node.get("extras", {}).get("za_name", node.get("name"))
@@ -250,7 +258,13 @@ def build(source, out):
             f"        (file: {ron_string(m['file'])}, offset: {m['offset']}, "
             f"vertices: {m['vertices']}, triangles: {m['triangles']}, "
             f"wide: {str(m['wide']).lower()}, min: {ron_floats(m['min'])}, "
-            f"max: {ron_floats(m['max'])}),"
+            f"max: {ron_floats(m['max'])}"
+            + (
+                ", runs: [" + ", ".join(f"({n}, {t})" for n, t in m["runs"]) + "]"
+                if m["runs"]
+                else ""
+            )
+            + "),"
         )
     lines.append("    ],")
     lines.append("    structures: [")
