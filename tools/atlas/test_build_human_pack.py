@@ -21,8 +21,11 @@ FACES = [
 
 
 def glb(material, nodes):
+    """One mesh: the cube once per material in `material` (a name or a
+    list of names), each copy a primitive of its own."""
     import DracoPy
 
+    materials = [material] if isinstance(material, str) else material
     draco = DracoPy.encode(CUBE, faces=FACES, quantization_bits=16)
     padded = draco + b"\0" * ((4 - len(draco) % 4) % 4)
     document = {
@@ -33,14 +36,14 @@ def glb(material, nodes):
             {"componentType": 5125, "count": 36, "type": "SCALAR"},
             {"componentType": 5126, "count": 8, "type": "VEC3"},
         ],
-        "materials": [{"name": material}],
+        "materials": [{"name": name} for name in materials],
         "meshes": [
             {
                 "primitives": [
                     {
                         "attributes": {"POSITION": 1},
                         "indices": 0,
-                        "material": 0,
+                        "material": index,
                         "extensions": {
                             "KHR_draco_mesh_compression": {
                                 "bufferView": 0,
@@ -48,6 +51,7 @@ def glb(material, nodes):
                             }
                         },
                     }
+                    for index in range(len(materials))
                 ]
             }
         ],
@@ -96,6 +100,28 @@ class RoundTrip(unittest.TestCase):
             indices = struct.unpack_from("<36H", data, 48)
             self.assertEqual(sorted(set(indices)), list(range(8)))
             self.assertIn("structures: [", (out / "atlas.ron").read_text())
+            self.assertEqual(mesh["runs"], [], "one tissue: no runs")
+
+    def test_a_muscle_with_its_tendon_keeps_which_triangles_are_which(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, out = Path(tmp) / "source", Path(tmp) / "out"
+            source.mkdir()
+            (source / "skeletal.glb").write_bytes(
+                glb(["Bone-1", "Suture-2", "Cartilage"], [{"name": "Rib", "mesh": 0}])
+            )
+            (source / "muscular.glb").write_bytes(
+                glb(["Internal rotator", "Tendon"], [{"name": "Muscle", "mesh": 0}])
+            )
+            (source / "joints.glb").write_bytes(glb("Ligament", [{"name": "Lig", "mesh": 0}]))
+            (source / "lexicon.json").write_text("{}")
+
+            meshes, _ = build_human_pack.build(source, out)
+
+            # Bone and suture are both bone: one run.
+            self.assertEqual(meshes[0]["runs"], [(24, "Bone"), (12, "Cartilage")])
+            self.assertEqual(meshes[1]["runs"], [(12, "Muscle"), (12, "Tendon")])
+            self.assertEqual(meshes[1]["triangles"], 24)
+            self.assertIn("runs: [(12, Muscle), (12, Tendon)]", (out / "atlas.ron").read_text())
 
 
 if __name__ == "__main__":

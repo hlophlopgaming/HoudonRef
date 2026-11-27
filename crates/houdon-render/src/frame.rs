@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use houdon_core::atlas::Fibres;
-use houdon_core::{AtlasView, Light, Model, ModelId, Room, Scene, Shading, Surface};
+use houdon_core::{AtlasView, Light, Model, ModelId, Room, Scene, Shading, Surface, Tissue};
 
 use crate::RenderQuality;
 
@@ -38,6 +38,13 @@ pub enum FrameSurface {
     Colors(ObjectColors),
     /// The model's materials, part by part; parts without one are Clay.
     Materials,
+    /// A plain colour part by part, picked by the part's material index:
+    /// the first for index 0 or none, the second otherwise. Fibre lines
+    /// go only on the parts whose `fibres` flag is set the same way.
+    Parts {
+        colors: [Vec3; 2],
+        fibres: [bool; 2],
+    },
 }
 
 /// How strongly an object is marked out.
@@ -176,12 +183,24 @@ impl Frame {
         let mut frame = Self::from_scene(&view.scene, aspect);
         frame.light_centre = view.shown_bounds().center();
         frame.objects.extend(view.shown().map(|shown| {
-            let color = view.color(shown.structure);
+            // A muscle's belly in its colour, its tendon pale.
+            let structure = shown.structure;
+            let tissue = |k: usize| {
+                structure
+                    .tissues
+                    .get(k)
+                    .copied()
+                    .unwrap_or(structure.tissue)
+            };
+            let surface = FrameSurface::Parts {
+                colors: [0, 1].map(|k| view.tissue_color(structure, tissue(k))),
+                fibres: [0, 1].map(|k| tissue(k) == Tissue::Muscle),
+            };
             FrameObject {
                 model_id: shown.model_id,
                 model: Arc::clone(&shown.structure.model),
                 transform: Mat4::IDENTITY,
-                surface: FrameSurface::Colors(ObjectColors::uniform(color)),
+                surface,
                 highlight: if shown.selected {
                     Highlight::Selected
                 } else if shown.hovered {

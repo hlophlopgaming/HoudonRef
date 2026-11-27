@@ -413,11 +413,18 @@ impl SceneRenderer {
             for (part_index, part) in model.parts.iter().enumerate() {
                 let material = match object.surface {
                     FrameSurface::Materials => part.material,
-                    FrameSurface::Colors(_) => None,
+                    FrameSurface::Colors(_) | FrameSurface::Parts { .. } => None,
                 };
+                // Which of a two-colour surface's slots this part takes.
+                let slot = usize::from(part.material.is_some_and(|m| m > 0));
                 let colors = match object.surface {
                     FrameSurface::Colors(colors) => colors,
                     FrameSurface::Materials => clay,
+                    FrameSurface::Parts { colors, .. } => ObjectColors::uniform(colors[slot]),
+                };
+                let fibres = match object.surface {
+                    FrameSurface::Parts { fibres, .. } if !fibres[slot] => None,
+                    _ => object.fibres,
                 };
                 let (base_color, material_params) = match material.map(|m| &model.materials[m]) {
                     Some(m) => (
@@ -442,12 +449,8 @@ impl SceneRenderer {
                     color_above: colors.above.extend(colors.to_y).to_array(),
                     base_color,
                     material: material_params,
-                    fibre_axis: object
-                        .fibres
-                        .map_or([0.0; 4], |f| f.axis.extend(f.lines).to_array()),
-                    fibre_centre: object
-                        .fibres
-                        .map_or([0.0; 4], |f| f.centre.extend(0.0).to_array()),
+                    fibre_axis: fibres.map_or([0.0; 4], |f| f.axis.extend(f.lines).to_array()),
+                    fibre_centre: fibres.map_or([0.0; 4], |f| f.centre.extend(0.0).to_array()),
                 });
                 entries.push(DrawEntry {
                     model_id: object.model_id,

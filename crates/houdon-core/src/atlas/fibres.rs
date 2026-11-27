@@ -20,16 +20,26 @@ pub struct Fibres {
 const SPACING: f32 = 0.007;
 
 impl Fibres {
-    /// The fibres of a muscle, `None` for other tissues.
+    /// The fibres of a muscle's belly, `None` for what has none.
     pub fn of(structure: &Structure) -> Option<Self> {
-        if structure.tissue != Tissue::Muscle {
-            return None;
+        let belly = structure
+            .tissues
+            .iter()
+            .position(|&t| t == Tissue::Muscle)?;
+        let model = &structure.model;
+        let mut used = vec![false; model.vertices.len()];
+        for part in model.parts.iter().filter(|p| p.material == Some(belly)) {
+            let start = part.first_index as usize;
+            for &i in &model.indices[start..start + part.index_count as usize] {
+                used[i as usize] = true;
+            }
         }
-        let points: Vec<Vec3> = structure
-            .model
+        let points: Vec<Vec3> = model
             .vertices
             .iter()
-            .map(|v| Vec3::from(v.position))
+            .zip(&used)
+            .filter(|&(_, &used)| used)
+            .map(|(v, _)| Vec3::from(v.position))
             .collect();
         if points.len() < 4 {
             return None;

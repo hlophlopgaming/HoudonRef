@@ -24,21 +24,30 @@ impl AtlasView {
             None => self.shown().collect(),
         };
         for shown in chosen {
-            let model = &shown.structure.model;
-            let color = self.color(shown.structure);
-            let material = colors.iter().position(|&c| c == color).unwrap_or_else(|| {
-                colors.push(color);
-                colors.len() - 1
-            });
+            let structure = shown.structure;
+            let model = &structure.model;
             let first_vertex = vertices.len() as u32;
             let first_index = indices.len() as u32;
             vertices.extend_from_slice(&model.vertices);
             indices.extend(model.indices.iter().map(|i| i + first_vertex));
-            parts.push(MeshPart {
-                first_index,
-                index_count: model.indices.len() as u32,
-                material: Some(material),
-            });
+            // A part per tissue: the belly in its colour, the tendon pale.
+            for part in &model.parts {
+                let tissue = part
+                    .material
+                    .and_then(|m| structure.tissues.get(m))
+                    .copied()
+                    .unwrap_or(structure.tissue);
+                let color = self.tissue_color(structure, tissue);
+                let material = colors.iter().position(|&c| c == color).unwrap_or_else(|| {
+                    colors.push(color);
+                    colors.len() - 1
+                });
+                parts.push(MeshPart {
+                    first_index: first_index + part.first_index,
+                    index_count: part.index_count,
+                    material: Some(material),
+                });
+            }
         }
         if indices.is_empty() {
             return None;
