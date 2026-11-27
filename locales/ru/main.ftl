@@ -338,3 +338,15 @@ png-file-type = Картинка PNG
 export-error = Не удалось сохранить картинку: { $reason }
 toolbar-presentation = Презентация
 toolbar-presentation-hint = Скрыть все панели и показать только вид (P). P или Esc возвращают их.
+
+## Navigation head: the view a click on it turns to. Left and right are the figure's.
+view-front = Спереди
+view-front-left = Три четверти спереди слева
+view-left = Слева
+view-back-left = Три четверти сзади слева
+view-back = Сзади
+view-back-right = Три четверти сзади справа
+view-right = Справа
+view-front-right = Три четверти спереди справа
+view-above = Сверху
+view-below = Снизу

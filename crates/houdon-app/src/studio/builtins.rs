@@ -2,7 +2,8 @@
 
 const MALE_GLB: &[u8] = include_bytes!("../../../../assets/models/test/male.glb");
 const FEMALE_GLB: &[u8] = include_bytes!("../../../../assets/models/test/female.glb");
-const ASARO_HEAD_GLB: &[u8] = include_bytes!("../../../../assets/models/heads/asaro_head.glb");
+pub(crate) const ASARO_HEAD_GLB: &[u8] =
+    include_bytes!("../../../../assets/models/heads/asaro_head.glb");
 const PLANAR_HEAD_GLB: &[u8] = include_bytes!("../../../../assets/models/heads/planar_head.glb");
 const BASE_HEAD_GLB: &[u8] = include_bytes!("../../../../assets/models/heads/base_head.glb");
 const WOLFSARO_HEAD_GLB: &[u8] =

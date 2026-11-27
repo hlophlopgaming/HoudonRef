@@ -334,3 +334,15 @@ png-file-type = PNG picture
 export-error = Could not save the picture: { $reason }
 toolbar-presentation = Presentation
 toolbar-presentation-hint = Hide every panel and show only the view (P). P or Esc brings them back.
+
+## Navigation head: the view a click on it turns to. Left and right are the figure's.
+view-front = Front
+view-front-left = Three-quarter, front left
+view-left = Left side
+view-back-left = Three-quarter, back left
+view-back = Back
+view-back-right = Three-quarter, back right
+view-right = Right side
+view-front-right = Three-quarter, front right
+view-above = From above
+view-below = From below

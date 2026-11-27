@@ -12,6 +12,7 @@ use houdon_core::{
 use houdon_i18n::{Language, Localizer};
 use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
+use crate::navigation::{HeadAction, navigation_head};
 use crate::studio::{drive_camera, physical_size};
 
 /// Where the human pack is, next to the web page.
@@ -339,6 +340,23 @@ impl AtlasTab {
                     }
                     ui.ctx().request_repaint();
                 }
+            }
+            if let Some(action) = navigation_head(ui, tr, rect, &view.scene.camera) {
+                match action {
+                    HeadAction::Orbit { yaw, pitch } => {
+                        self.flight = None;
+                        view.scene.camera.orbit(yaw, pitch);
+                    }
+                    HeadAction::View(side) => {
+                        let goal = side.applied_to(&view.scene.camera);
+                        if ui.style().animation_time > 0.0 {
+                            self.flight = Some(CameraFlight::new(view.scene.camera, goal));
+                        } else {
+                            view.scene.camera = goal;
+                        }
+                    }
+                }
+                ui.ctx().request_repaint();
             }
         });
     }

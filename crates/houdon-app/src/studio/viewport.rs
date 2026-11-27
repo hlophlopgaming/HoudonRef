@@ -2,6 +2,7 @@
 //! picture drawn by the renderer.
 
 use super::*;
+use crate::navigation::{HeadAction, navigation_head};
 
 impl Studio {
     /// Draws where each light is: a dot in its colour for point and spot
@@ -68,7 +69,21 @@ impl Studio {
             }
         }
 
+        if let Some(flight) = &mut self.camera_flight {
+            let seconds = ui.input(|i| i.stable_dt).min(0.1);
+            self.scene.camera = flight.advance(seconds);
+            if flight.finished() {
+                self.camera_flight = None;
+            } else {
+                ui.ctx().request_repaint();
+            }
+        }
+        let placed = self.scene.camera;
         drive_camera(&mut self.scene.camera, ui, &response, rect);
+        if self.scene.camera != placed {
+            // The artist took the camera: stop flying it.
+            self.camera_flight = None;
+        }
         if response.clicked()
             && let Some(pointer) = response.interact_pointer_pos()
         {
@@ -109,6 +124,24 @@ impl Studio {
             },
         ));
         self.paint_light_icons(&painter, rect, aspect);
+        if let Some(action) = navigation_head(ui, tr, rect, &self.scene.camera) {
+            match action {
+                HeadAction::Orbit { yaw, pitch } => {
+                    self.camera_flight = None;
+                    self.scene.camera.orbit(yaw, pitch);
+                }
+                HeadAction::View(side) => {
+                    let goal = side.applied_to(&self.scene.camera);
+                    if ui.style().animation_time > 0.0 {
+                        self.camera_flight =
+                            Some(houdon_core::CameraFlight::new(self.scene.camera, goal));
+                    } else {
+                        self.scene.camera = goal;
+                    }
+                }
+            }
+            ui.ctx().request_repaint();
+        }
         if self.scene.object_count() == 0 {
             // An empty scene says how to begin.
             painter.text(

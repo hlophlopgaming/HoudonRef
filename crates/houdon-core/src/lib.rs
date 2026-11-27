@@ -10,6 +10,7 @@ pub mod light_preset;
 pub mod mask;
 pub mod matcap;
 pub mod model;
+pub mod navigation;
 pub mod preset;
 pub mod room;
 pub mod scene;
@@ -26,6 +27,7 @@ pub use light_preset::{LightPreset, LightPresetError};
 pub use mask::{DEFAULT_PATTERN_SIZE, LightMask, MaskError, MaskImage};
 pub use matcap::{Matcap, MatcapError, MatcapImage};
 pub use model::{Bounds, LoadError, Material, MeshPart, Model, ObjImport, TextureImage, Vertex};
+pub use navigation::ClassicView;
 pub use preset::{CameraPreset, CameraTarget, MAX_PRESET_NAME_BYTES, PresetError, RoomPreset};
 pub use room::{BuiltinRoom, MIN_ROOM_REACH, Room, RoomShape};
 pub use scene::{

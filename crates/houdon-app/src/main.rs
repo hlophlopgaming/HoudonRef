@@ -6,6 +6,7 @@ mod app;
 mod atlas;
 mod masks;
 mod matcaps;
+mod navigation;
 mod studio;
 
 use app::HoudonApp;

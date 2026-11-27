@@ -31,6 +31,7 @@ mod scene_files;
 mod toolbar;
 mod viewport;
 mod widgets;
+pub(crate) use builtins::ASARO_HEAD_GLB;
 use builtins::Builtin;
 use files::{extension, file_name};
 use light_presets::LightPresets;
@@ -85,6 +86,8 @@ pub struct Studio {
     exporter: export::Exporter,
     /// The toolbar asked for presentation mode; the app takes it.
     presentation_requested: bool,
+    /// The camera on its way to a view the navigation head asked for.
+    camera_flight: Option<houdon_core::CameraFlight>,
 }
 
 impl Studio {
@@ -114,6 +117,7 @@ impl Studio {
             view_size: [1280, 720],
             exporter: export::Exporter::default(),
             presentation_requested: false,
+            camera_flight: None,
         };
         studio.add_builtin(Builtin::Male);
         studio.scene.select(None);
