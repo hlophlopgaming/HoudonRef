@@ -193,13 +193,13 @@ impl Frame {
                     .unwrap_or(structure.tissue)
             };
             let surface = FrameSurface::Parts {
-                colors: [0, 1].map(|k| view.tissue_color(structure, tissue(k))),
+                colors: [0, 1].map(|k| view.structure_tissue_color(shown.index, tissue(k))),
                 fibres: [0, 1].map(|k| tissue(k) == Tissue::Muscle),
             };
             FrameObject {
                 model_id: shown.model_id,
-                model: Arc::clone(&shown.structure.model),
-                transform: Mat4::IDENTITY,
+                model: Arc::clone(shown.model),
+                transform: shown.transform,
                 surface,
                 highlight: if shown.selected {
                     Highlight::Selected

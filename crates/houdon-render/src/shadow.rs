@@ -184,6 +184,7 @@ impl ShadowLayout {
         }
         for object in frame.objects.iter().filter(|o| o.casts_shadows) {
             object.model_id.hash(&mut hasher);
+            std::sync::Arc::as_ptr(&object.model).hash(&mut hasher);
             bytemuck::cast_slice::<f32, u8>(&object.transform.to_cols_array()).hash(&mut hasher);
         }
         hasher.finish()

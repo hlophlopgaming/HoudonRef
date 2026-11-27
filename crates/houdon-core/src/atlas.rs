@@ -12,12 +12,14 @@ use crate::{Material, MeshPart, Model};
 mod export;
 mod fibres;
 mod masses;
+mod pose;
 mod view;
 
 pub use export::{ATTRIBUTION, to_glb};
 pub use fibres::Fibres;
 
 pub use masses::{DEEP_MUSCLE_SRGB, MASSES, Mass, NEIGHBOURS, mass_of};
+pub use pose::PoseJoint;
 pub use view::{AtlasColors, AtlasView, Layer, LayerState, SKULL, ShownStructure, StructureIndex};
 
 /// The body system a structure belongs to: one of the Atlas's layers.

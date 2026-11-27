@@ -1,12 +1,13 @@
 //! GPU side of the scene: pipeline, per-model meshes and per-object data.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::{self, util::DeviceExt as _};
 use glam::Vec3;
 use houdon_core::{
-    Light, LightKind, MAX_LIGHTS, MeshPart, ModelId, ShadingMode, SolidLighting, Vertex,
+    Light, LightKind, MAX_LIGHTS, MeshPart, Model, ModelId, ShadingMode, SolidLighting, Vertex,
 };
 
 use crate::composite::{
@@ -175,13 +176,13 @@ struct DrawEntry {
 }
 
 pub(crate) struct GpuMesh {
+    model: Arc<Model>,
     vertex_buffer: wgpu::Buffer,
     /// One curvature per vertex, for the geometry cavity.
-    curvature_buffer: wgpu::Buffer,
+    curvature_buffer: Option<wgpu::Buffer>,
     index_buffer: wgpu::Buffer,
     /// Pairs of indices, one per edge, for the wireframe.
-    edge_buffer: wgpu::Buffer,
-    edge_index_count: u32,
+    edges: Option<(wgpu::Buffer, u32)>,
 }
 
 /// GPU resources for drawing frames. One renders the viewport (stored in
@@ -212,6 +213,7 @@ pub struct SceneRenderer {
     object_capacity: u64,
     gamma_encode: bool,
     meshes: HashMap<ModelId, GpuMesh>,
+    zero_curvature: wgpu::Buffer,
     shadows: ShadowResources,
     materials: MaterialResources,
     composite: Composite,
@@ -341,6 +343,7 @@ impl SceneRenderer {
             materials,
             composite: Composite::new(device, target_format, depth_format),
             meshes: HashMap::new(),
+            zero_curvature: zero_curvature(device, 4),
             draw_list: Vec::new(),
         }
     }
@@ -369,7 +372,7 @@ impl SceneRenderer {
     ) {
         self.shadows
             .set_atlas_size(device, frame.quality.shadow_atlas_size);
-        self.sync_meshes(device, frame);
+        self.sync_meshes(device, queue, frame);
         self.prepare_draw_list(device, queue, frame);
         let shadow_layout = ShadowLayout::new(frame);
         self.write_globals(device, queue, frame, &shadow_layout);
@@ -380,14 +383,58 @@ impl SceneRenderer {
 
     /// Uploads the meshes of new models and drops those no longer drawn,
     /// with their material textures.
-    fn sync_meshes(&mut self, device: &wgpu::Device, frame: &Frame) {
-        let drawn = |id: ModelId| frame.objects.iter().any(|o| o.model_id == id);
-        self.meshes.retain(|id, _| drawn(*id));
-        self.materials.retain(drawn);
+    fn sync_meshes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame) {
+        let drawn: HashSet<_> = frame.objects.iter().map(|o| o.model_id).collect();
+        self.meshes.retain(|id, _| drawn.contains(id));
+        self.materials.retain(|id| drawn.contains(&id));
+        let mut curvature_bytes = 4;
         for object in &frame.objects {
-            self.meshes
+            let mesh = self
+                .meshes
                 .entry(object.model_id)
                 .or_insert_with(|| upload_mesh(device, &object.model));
+            if !Arc::ptr_eq(&mesh.model, &object.model) {
+                if mesh.model.vertices.len() == object.model.vertices.len()
+                    && mesh.model.indices == object.model.indices
+                {
+                    queue.write_buffer(
+                        &mesh.vertex_buffer,
+                        0,
+                        bytemuck::cast_slice(&object.model.vertices),
+                    );
+                    mesh.model = Arc::clone(&object.model);
+                    mesh.curvature_buffer = None;
+                } else {
+                    *mesh = upload_mesh(device, &object.model);
+                }
+            }
+            if frame.shading.cavity.geometry {
+                mesh.curvature_buffer.get_or_insert_with(|| {
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("houdon_mesh_curvature"),
+                        contents: bytemuck::cast_slice(&object.model.vertex_curvature()),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    })
+                });
+            } else {
+                curvature_bytes = curvature_bytes.max(object.model.vertices.len() as u64 * 4);
+            }
+            if frame.shading.lines.wireframe {
+                mesh.edges.get_or_insert_with(|| {
+                    let edges = edge_indices(&object.model.indices);
+                    (
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("houdon_mesh_edges"),
+                            contents: bytemuck::cast_slice(&edges),
+                            usage: wgpu::BufferUsages::INDEX,
+                        }),
+                        edges.len() as u32,
+                    )
+                });
+            }
+        }
+        if self.zero_curvature.size() < curvature_bytes {
+            self.zero_curvature = zero_curvature(device, curvature_bytes.next_power_of_two());
         }
     }
 
@@ -777,7 +824,13 @@ impl SceneRenderer {
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, mesh.curvature_buffer.slice(..));
+            render_pass.set_vertex_buffer(
+                1,
+                mesh.curvature_buffer
+                    .as_ref()
+                    .unwrap_or(&self.zero_curvature)
+                    .slice(..),
+            );
             render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(part_range(&entry.part), 0, 0..1);
         }
@@ -795,12 +848,15 @@ impl SceneRenderer {
             if !entry.wireframe {
                 continue;
             }
+            let Some((edges, count)) = &mesh.edges else {
+                continue;
+            };
             let offset = (i as u64 * self.object_stride) as u32;
             render_pass.set_bind_group(1, &self.object_bind_group, &[offset]);
             render_pass.set_bind_group(3, self.materials.bind_group(entry.material), &[]);
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(mesh.edge_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..mesh.edge_index_count, 0, 0..1);
+            render_pass.set_index_buffer(edges.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..*count, 0, 0..1);
         }
     }
 }
@@ -1173,25 +1229,25 @@ fn object_resources(
     (buffer, bind_group)
 }
 
-fn upload_mesh(device: &wgpu::Device, model: &houdon_core::Model) -> GpuMesh {
-    let edges = edge_indices(&model.indices);
+fn zero_curvature(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("houdon_zero_curvature"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX,
+        mapped_at_creation: false,
+    })
+}
+
+fn upload_mesh(device: &wgpu::Device, model: &Arc<Model>) -> GpuMesh {
     GpuMesh {
-        edge_index_count: edges.len() as u32,
-        edge_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("houdon_mesh_edges"),
-            contents: bytemuck::cast_slice(&edges),
-            usage: wgpu::BufferUsages::INDEX,
-        }),
+        model: Arc::clone(model),
+        edges: None,
         vertex_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("houdon_mesh_vertices"),
             contents: bytemuck::cast_slice(&model.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         }),
-        curvature_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("houdon_mesh_curvature"),
-            contents: bytemuck::cast_slice(&model.vertex_curvature()),
-            usage: wgpu::BufferUsages::VERTEX,
-        }),
+        curvature_buffer: None,
         index_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("houdon_mesh_indices"),
             contents: bytemuck::cast_slice(&model.indices),

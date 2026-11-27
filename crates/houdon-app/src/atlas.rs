@@ -14,6 +14,9 @@ use houdon_render::{AntiAliasing, Frame, RenderQuality, ViewportCallback};
 
 use crate::studio::{drive_camera, physical_size};
 
+mod pose;
+use pose::PoseControls;
+
 /// Where the human pack is, next to the web page.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const PACK_URL: &str = "atlas/human/";
@@ -54,6 +57,7 @@ enum State {
 
 pub struct AtlasTab {
     state: State,
+    pose_controls: PoseControls,
     anti_aliasing: AntiAliasing,
     quality: RenderQuality,
     view_size: [u32; 2],
@@ -95,6 +99,7 @@ impl Default for AtlasTab {
     fn default() -> Self {
         Self {
             state: State::Idle,
+            pose_controls: PoseControls::default(),
             anti_aliasing: AntiAliasing::VIEWPORT,
             quality: RenderQuality::default(),
             view_size: [1, 1],
@@ -172,6 +177,10 @@ impl AtlasTab {
             .max_size(340.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    if self.pose_controls.panel(ui, tr, view) {
+                        self.anchor = None;
+                        self.hover = None;
+                    }
                     if ui
                         .button(tr.tr("atlas-open-in-studio"))
                         .on_hover_text(tr.tr("atlas-open-in-studio-hint"))
@@ -190,9 +199,6 @@ impl AtlasTab {
                 ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
             let aspect = rect.width() / rect.height().max(1.0);
             self.view_size = physical_size(rect, ui.ctx().pixels_per_point());
-            if response.double_clicked() {
-                self.frame_pending = Some(Framing::Selected);
-            }
             if let Some(framing) = self.frame_pending.take() {
                 let start = view.scene.camera;
                 match framing {
@@ -223,7 +229,19 @@ impl AtlasTab {
                 }
             }
             let placed = view.scene.camera;
-            drive_camera(&mut view.scene.camera, ui, &response, rect);
+            let (pose_input, pose_changed) =
+                self.pose_controls.interact(ui, tr, view, rect, aspect);
+            if pose_changed {
+                self.anchor = None;
+                self.hover = None;
+                self.flight = None;
+            }
+            if !pose_input {
+                drive_camera(&mut view.scene.camera, ui, &response, rect);
+                if response.double_clicked() {
+                    self.frame_pending = Some(Framing::Selected);
+                }
+            }
             if view.scene.camera != placed {
                 // The artist took the camera: stop flying it.
                 self.flight = None;
@@ -234,7 +252,10 @@ impl AtlasTab {
                 view.scene.camera.ray(ndc_x, ndc_y, aspect)
             };
             // The name under the pointer, looked up again once it moves.
-            match response.hover_pos().filter(|_| !response.dragged()) {
+            match response
+                .hover_pos()
+                .filter(|_| !response.dragged() && !pose_input)
+            {
                 Some(pointer) => {
                     let now = ui.input(|i| i.time);
                     let stale = self.hover.as_ref().is_none_or(|h| {
@@ -297,7 +318,8 @@ impl AtlasTab {
                     }
                 }
             }
-            if response.clicked()
+            if !pose_input
+                && response.clicked()
                 && let Some(pointer) = response.interact_pointer_pos()
             {
                 let (origin, direction) = ray(view, pointer);
@@ -306,6 +328,9 @@ impl AtlasTab {
                 self.anchor = hit.map(|(index, t)| (index, origin + direction * t));
             }
             let painter = ui.painter_at(rect);
+            let preview = self
+                .pose_controls
+                .previewing(pose_input && ui.input(|i| i.pointer.primary_down()));
             let [r, g, b] = view.scene.room.backdrop_srgb();
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(r, g, b));
             painter.add(eframe::egui_wgpu::Callback::new_paint_callback(
@@ -315,14 +340,23 @@ impl AtlasTab {
                         quality: self.quality,
                         ..Frame::from_atlas(view, aspect)
                     },
-                    size: self.view_size,
-                    anti_aliasing: self.anti_aliasing,
+                    size: if preview {
+                        self.view_size.map(|side| side.div_ceil(2))
+                    } else {
+                        self.view_size
+                    },
+                    anti_aliasing: if preview {
+                        AntiAliasing::OFF
+                    } else {
+                        self.anti_aliasing
+                    },
                 },
             ));
+            self.pose_controls.paint(&painter, view, rect, aspect);
             if let Some(index) = view.selected() {
                 let anchor = match self.anchor {
                     Some((clicked, point)) if clicked == index => point,
-                    _ => view.atlas().structures()[index].model.bounds.center(),
+                    _ => view.structure_bounds(index).center(),
                 };
                 let screen = view_projection(view, aspect, rect, anchor);
                 if let Some(screen) = screen

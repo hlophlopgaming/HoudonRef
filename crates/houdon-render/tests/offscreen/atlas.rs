@@ -40,6 +40,35 @@ fn centre(renderer: &mut OffscreenRenderer, view: &AtlasView) -> [u8; 4] {
 }
 
 #[test]
+fn a_pose_updates_the_muscle_under_its_existing_gpu_key() {
+    let Some(mut renderer) = renderer() else {
+        return;
+    };
+    let mut view = AtlasView::new(human());
+    assert!(view.enable_pose());
+    let muscle = view.index_of("Long head of biceps brachii.l").unwrap();
+    view.isolate([muscle]);
+    view.frame(1.0);
+    let elbow = view
+        .pose_joints()
+        .iter()
+        .position(|joint| joint.name == "elbow" && joint.side == houdon_core::Side::Left)
+        .unwrap();
+    let rest = Frame::from_atlas(&view, 1.0);
+    let rest_image = renderer.render(&rest, SIZE, SIZE);
+    view.set_joint_angles(elbow, glam::Vec3::new(-1.25, 0.0, 0.0));
+    let bent = Frame::from_atlas(&view, 1.0);
+    assert_eq!(rest.objects[0].model_id, bent.objects[0].model_id);
+    assert_eq!(rest.objects[0].transform, bent.objects[0].transform);
+    assert_ne!(rest_image, renderer.render(&bent, SIZE, SIZE));
+    view.reset_pose();
+    assert_eq!(
+        rest_image,
+        renderer.render(&Frame::from_atlas(&view, 1.0), SIZE, SIZE)
+    );
+}
+
+#[test]
 fn see_through_muscles_show_the_bone_under_them() {
     let Some(mut renderer) = renderer() else {
         return;

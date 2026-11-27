@@ -2,13 +2,15 @@
 //! and shading it is seen with.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use glam::Vec3;
+use glam::{Mat4, Quat, Vec3};
 
 use super::masses::{DEEP_MUSCLE_SRGB, Mass, mass_of};
+use super::pose::{Pose, PoseJoint, posed_bounds};
 use super::{Atlas, BodySystem, Fibres, Structure, Tissue};
 use crate::scene::ray_box_distance;
-use crate::{Bounds, ModelId, Scene};
+use crate::{Bounds, Model, ModelId, Scene};
 
 /// A structure's place in its atlas.
 pub type StructureIndex = usize;
@@ -18,7 +20,7 @@ pub type StructureIndex = usize;
 pub enum Layer {
     /// Bones, teeth and the cartilage of the skeleton.
     Bones,
-    /// Surface muscles and their tendons.
+    /// Surface muscles and their connective tissue.
     Muscles,
     /// Muscles usually covered by the surface forms; off at first.
     DeepMuscles,
@@ -40,6 +42,9 @@ impl Layer {
 
     /// The layer a structure is shown with.
     pub fn of(structure: &Structure) -> Self {
+        if structure.id == "Linea alba" {
+            return Self::Muscles;
+        }
         match (structure.system, structure.tissue) {
             (BodySystem::Joints, _) => Self::Joints,
             (_, Tissue::Muscle | Tissue::Tendon) => {
@@ -183,6 +188,8 @@ pub struct ShownStructure<'a> {
     pub index: StructureIndex,
     pub structure: &'a Structure,
     pub model_id: ModelId,
+    pub model: &'a Arc<Model>,
+    pub transform: Mat4,
     pub opacity: f32,
     /// Selected, or in the mass the legend points at: drawn highlighted.
     pub selected: bool,
@@ -195,8 +202,11 @@ pub struct ShownStructure<'a> {
 /// The Atlas tab: the body, its layers and the view of it.
 pub struct AtlasView {
     atlas: Atlas,
+    pose: Option<Pose>,
     /// The GPU cache key of each structure's model, in the atlas's order.
     model_ids: Vec<ModelId>,
+    structure_layers: Vec<Layer>,
+    masses: Vec<Option<&'static Mass>>,
     layers: [LayerState; Layer::ALL.len()],
     bounds: Bounds,
     selected: Option<StructureIndex>,
@@ -227,6 +237,8 @@ impl AtlasView {
 
     pub fn new(atlas: Atlas) -> Self {
         let model_ids = atlas.structures().iter().map(|_| ModelId::next()).collect();
+        let structure_layers = atlas.structures().iter().map(Layer::of).collect();
+        let masses = atlas.structures().iter().map(mass_of).collect();
         let fibres = atlas.structures().iter().map(Fibres::of).collect();
         let bounds = atlas
             .structures()
@@ -245,7 +257,10 @@ impl AtlasView {
         scene.shading.lines.fold_sensitivity = 0.0;
         let mut view = Self {
             atlas,
+            pose: None,
             model_ids,
+            structure_layers,
+            masses,
             layers: [
                 LayerState::SHOWN,
                 LayerState::SHOWN,
@@ -273,6 +288,55 @@ impl AtlasView {
         &self.atlas
     }
 
+    /// Prepares the pose controls the first time they are opened.
+    pub fn enable_pose(&mut self) -> bool {
+        if self.pose.is_none() {
+            self.pose = Pose::new(&self.atlas);
+        }
+        self.pose.is_some()
+    }
+
+    pub fn pose_joints(&self) -> &[PoseJoint] {
+        self.pose.as_ref().map_or(&[], |pose| &pose.joints)
+    }
+
+    pub fn set_joint_angles(&mut self, joint: usize, angles: Vec3) {
+        if let Some(pose) = &mut self.pose
+            && joint < pose.joints.len()
+        {
+            pose.set_angles(joint, angles, &self.atlas, &self.fibres);
+        }
+    }
+
+    pub fn rotate_joint(&mut self, joint: usize, rotation: Quat) {
+        if let Some(pose) = &mut self.pose
+            && joint < pose.joints.len()
+        {
+            pose.rotate(joint, rotation, &self.atlas, &self.fibres);
+        }
+    }
+
+    pub fn reset_pose(&mut self) {
+        if let Some(pose) = &mut self.pose {
+            pose.reset();
+        }
+    }
+
+    fn geometry(&self, index: StructureIndex) -> (&Arc<Model>, ModelId, Mat4, Option<Fibres>) {
+        let model = &self.atlas.structures()[index].model;
+        let id = self.model_ids[index];
+        let fibres = self.show_fibres.then_some(self.fibres[index]).flatten();
+        match &self.pose {
+            Some(pose) => pose.geometry(index, (model, id, fibres)),
+            None => (model, id, Mat4::IDENTITY, fibres),
+        }
+    }
+
+    pub fn structure_bounds(&self, index: StructureIndex) -> Bounds {
+        let (model, _, transform, _) = self.geometry(index);
+        posed_bounds(model.bounds, transform)
+    }
+
     pub fn layer(&self, layer: Layer) -> LayerState {
         self.layers[layer.index()]
     }
@@ -289,44 +353,49 @@ impl AtlasView {
         self.atlas
             .structures()
             .iter()
-            .zip(&self.model_ids)
             .enumerate()
-            .filter_map(|(index, (structure, &model_id))| {
-                let state = self.layers[Layer::of(structure).index()];
+            .filter_map(|(index, structure)| {
+                let layer = self.structure_layers[index];
+                let state = self.layers[layer.index()];
                 let shown = match &self.isolated {
                     Some(isolated) => isolated.contains(&index),
                     None => state.visible && !self.is_hidden(index),
                 };
-                let opacity = self.resting_opacity(structure);
+                if !shown {
+                    return None;
+                }
+                let (model, model_id, transform, fibres) = self.geometry(index);
+                let opacity = self.resting_opacity(layer);
                 let opacity = match self.selected {
                     // The selection reads solid even in a see-through layer.
                     Some(selected) if selected == index => 1.0,
                     Some(_) if self.fade_others => opacity.min(Self::GHOST_OPACITY),
                     _ => opacity,
                 };
-                shown.then_some(ShownStructure {
+                Some(ShownStructure {
                     index,
                     structure,
                     model_id,
+                    model,
+                    transform,
                     opacity,
                     selected: self.selected == Some(index)
-                        || self.emphasis.is_some() && mass_of(structure) == self.emphasis,
+                        || self.emphasis.is_some() && self.masses[index] == self.emphasis,
                     hovered: self.hovered == Some(index),
                     // A ghost keeps only its shape: lines on it would be
                     // noise in front of the selection.
-                    fibres: self.fibres[index]
-                        .filter(|_| self.show_fibres && opacity > Self::GHOST_OPACITY),
+                    fibres: fibres.filter(|_| self.show_fibres && opacity > Self::GHOST_OPACITY),
                 })
             })
     }
 
     /// How solid `structure` is when nothing fades it: its layer's
     /// opacity, or fully solid while isolated.
-    fn resting_opacity(&self, structure: &Structure) -> f32 {
+    fn resting_opacity(&self, layer: Layer) -> f32 {
         if self.isolated.is_some() {
             1.0
         } else {
-            self.layers[Layer::of(structure).index()].opacity
+            self.layers[layer.index()].opacity
         }
     }
 
@@ -425,13 +494,16 @@ impl AtlasView {
         let mut solid: Option<(f32, StructureIndex)> = None;
         let mut faint: Option<(f32, StructureIndex)> = None;
         for shown in self.shown() {
-            let model = &shown.structure.model;
-            let Some(entry) = ray_box_distance(origin, direction, &model.bounds) else {
+            let model = shown.model;
+            let inverse = shown.transform.inverse();
+            let local_origin = inverse.transform_point3(origin);
+            let local_direction = inverse.transform_vector3(direction);
+            let Some(entry) = ray_box_distance(local_origin, local_direction, &model.bounds) else {
                 continue;
             };
             // A structure faded for the selection is still picked as the
             // solid thing it is: a click on it means it.
-            let nearest = if self.resting_opacity(shown.structure) >= 0.5 {
+            let nearest = if self.resting_opacity(self.structure_layers[shown.index]) >= 0.5 {
                 &mut solid
             } else {
                 &mut faint
@@ -439,7 +511,7 @@ impl AtlasView {
             if nearest.is_some_and(|(t, _)| entry > t) {
                 continue;
             }
-            if let Some(t) = model.ray_hit(origin, direction)
+            if let Some(t) = model.ray_hit(local_origin, local_direction)
                 && nearest.is_none_or(|(n, _)| t < n)
             {
                 *nearest = Some((t, shown.index));
@@ -491,7 +563,7 @@ impl AtlasView {
     pub fn frame_selected(&mut self, aspect: f32) {
         match self.selected {
             Some(index) => {
-                let bounds = self.atlas.structures()[index].model.bounds;
+                let bounds = self.structure_bounds(index);
                 self.scene.camera.frame(&bounds, aspect);
             }
             None => self.frame(aspect),
@@ -508,6 +580,14 @@ impl AtlasView {
     /// Only a muscle's belly takes its mass's colour: its tendon and
     /// aponeurosis stay pale, as the book draws them.
     pub fn tissue_color(&self, structure: &Structure, tissue: Tissue) -> Vec3 {
+        self.part_color(structure, mass_of(structure), tissue)
+    }
+
+    pub fn structure_tissue_color(&self, index: StructureIndex, tissue: Tissue) -> Vec3 {
+        self.part_color(&self.atlas.structures()[index], self.masses[index], tissue)
+    }
+
+    fn part_color(&self, structure: &Structure, mass: Option<&Mass>, tissue: Tissue) -> Vec3 {
         match self.colors {
             AtlasColors::Clay => self.scene.shading.clay_color,
             AtlasColors::Natural => tissue.natural_color(),
@@ -517,7 +597,7 @@ impl AtlasView {
                 }
                 _ => tissue.natural_color(),
             },
-            AtlasColors::Masses => match (mass_of(structure), tissue) {
+            AtlasColors::Masses => match (mass, tissue) {
                 (Some(mass), Tissue::Muscle) => mass.color(),
                 (None, Tissue::Muscle) => {
                     Vec3::from(DEEP_MUSCLE_SRGB.map(|c| (f32::from(c) / 255.0).powf(2.2)))
@@ -552,20 +632,19 @@ impl AtlasView {
 
     /// The structures of `mass`.
     pub fn structures_of(&self, mass: &Mass) -> Vec<StructureIndex> {
-        self.atlas
-            .structures()
+        self.masses
             .iter()
             .enumerate()
-            .filter(|(_, s)| mass_of(s) == Some(mass))
+            .filter(|(_, known)| **known == Some(mass))
             .map(|(i, _)| i)
             .collect()
     }
 
     /// The bounds of what is shown, or of the whole body when nothing is.
     pub fn shown_bounds(&self) -> Bounds {
-        let bounds = self
-            .shown()
-            .fold(Bounds::EMPTY, |b, s| b.union(&s.structure.model.bounds));
+        let bounds = self.shown().fold(Bounds::EMPTY, |b, s| {
+            b.union(&posed_bounds(s.model.bounds, s.transform))
+        });
         if bounds.is_empty() {
             self.bounds
         } else {
@@ -583,7 +662,126 @@ impl AtlasView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Side;
     use crate::atlas::tests::human;
+
+    #[test]
+    fn abdominal_wall_holds_its_surface_order_when_the_chest_turns() {
+        let mut view = AtlasView::new(human());
+        let hit = |view: &AtlasView, origin: Vec3, direction: Vec3| {
+            let index = view.pick(origin, direction).unwrap();
+            view.atlas().structures()[index].id.clone()
+        };
+        // The neutral midline used to expose the psoas through the open gap.
+        assert_eq!(
+            hit(
+                &view,
+                Vec3::new(1.22573, 1.10641, 3.96603),
+                Vec3::new(-0.30256, -0.02776, -0.95272),
+            ),
+            "Linea alba"
+        );
+        assert!(view.enable_pose());
+        let chest = view
+            .pose_joints()
+            .iter()
+            .position(|joint| joint.name == "chest")
+            .unwrap();
+        view.set_joint_angles(chest, Vec3::new(-0.05, -0.12, -0.04));
+        // Through the former patch, the outer wall should stay in front of the rectus.
+        assert_eq!(
+            hit(
+                &view,
+                Vec3::new(1.45095, 1.13505, 4.52728),
+                Vec3::new(-0.32537, 0.00740, -0.94556),
+            ),
+            "External abdominal oblique muscle.r"
+        );
+    }
+
+    #[test]
+    fn a_pose_moves_bones_muscles_picking_and_studio_export_together() {
+        let mut view = AtlasView::new(human());
+        assert!(view.enable_pose());
+        let joint = |view: &AtlasView, name, side| {
+            view.pose_joints()
+                .iter()
+                .position(|j| j.name == name && j.side == side)
+                .unwrap()
+        };
+        let elbow = joint(&view, "elbow", Side::Left);
+        let wrist = joint(&view, "wrist", Side::Left);
+        let knee = joint(&view, "knee", Side::Right);
+        let finger = joint(&view, "index", Side::Left);
+        let radius = view.index_of("Radius.l").unwrap();
+        let right_radius = view.index_of("Radius.r").unwrap();
+        let tibia = view.index_of("Tibia.r").unwrap();
+        let phalanx = view
+            .index_of("Proximal phalanx of second finger of hand.l")
+            .unwrap();
+        let biceps = view.index_of("Long head of biceps brachii.l").unwrap();
+        let rest_radius = view.structure_bounds(radius);
+        let rest_right_radius = view.structure_bounds(right_radius);
+        let rest_tibia = view.structure_bounds(tibia);
+        let pivot = view.pose_joints()[elbow].position();
+        let wrist_rest = view.pose_joints()[wrist].position();
+        let rest_muscle = Arc::clone(view.geometry(biceps).0);
+
+        view.set_joint_angles(elbow, Vec3::new(-1.3, 0.25, -0.15));
+        assert!(view.pose_joints()[elbow].position().distance(pivot) < 0.0001);
+        assert!(view.pose_joints()[wrist].position().distance(wrist_rest) > 0.1);
+        let posed_radius = view.structure_bounds(radius);
+        assert!(posed_radius.center().distance(rest_radius.center()) > 0.1);
+        assert_eq!(view.structure_bounds(right_radius), rest_right_radius);
+        let posed_biceps = view.geometry(biceps);
+        assert!(!Arc::ptr_eq(posed_biceps.0, &rest_muscle));
+        assert!(
+            posed_biceps
+                .0
+                .vertices
+                .iter()
+                .all(|v| Vec3::from(v.position).is_finite())
+        );
+
+        let hand_base = view.structure_bounds(phalanx).center();
+        view.set_joint_angles(finger, Vec3::new(0.8, 0.1, 0.0));
+        assert!(view.structure_bounds(phalanx).center().distance(hand_base) > 0.003);
+        view.set_joint_angles(knee, Vec3::new(0.9, 0.0, 0.0));
+        assert!(
+            view.structure_bounds(tibia)
+                .center()
+                .distance(rest_tibia.center())
+                > 0.1
+        );
+
+        view.isolate([radius]);
+        let center = posed_radius.center();
+        assert_eq!(view.pick(center + Vec3::Z, Vec3::NEG_Z), Some(radius));
+        let exported = view.to_model("Posed radius").unwrap();
+        let vertex = view.atlas().structures()[radius].model.vertices[0];
+        let expected = view
+            .geometry(radius)
+            .2
+            .transform_point3(Vec3::from(vertex.position));
+        assert!(Vec3::from(exported.vertices[0].position).distance(expected) < 0.0001);
+
+        let posed_muscle = Arc::clone(view.geometry(biceps).0);
+        let chest = joint(&view, "chest", Side::Middle);
+        view.set_joint_angles(chest, Vec3::splat(std::f32::consts::PI));
+        let (_, max) = view.pose_joints()[chest].degree_limits();
+        assert!(
+            view.pose_joints()[chest]
+                .angles
+                .map(f32::to_degrees)
+                .abs_diff_eq(max, 0.001)
+        );
+        assert!(Arc::ptr_eq(view.geometry(biceps).0, &posed_muscle));
+
+        view.reset_pose();
+        assert_eq!(view.structure_bounds(radius), rest_radius);
+        assert_eq!(view.structure_bounds(tibia), rest_tibia);
+        assert!(Arc::ptr_eq(view.geometry(biceps).0, &rest_muscle));
+    }
 
     #[test]
     fn every_structure_has_one_layer_and_the_layers_split_sensibly() {

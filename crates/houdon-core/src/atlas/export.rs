@@ -25,10 +25,22 @@ impl AtlasView {
         };
         for shown in chosen {
             let structure = shown.structure;
-            let model = &structure.model;
+            let model = shown.model;
             let first_vertex = vertices.len() as u32;
             let first_index = indices.len() as u32;
-            vertices.extend_from_slice(&model.vertices);
+            vertices.extend(model.vertices.iter().map(|v| {
+                Vertex {
+                    position: shown
+                        .transform
+                        .transform_point3(Vec3::from(v.position))
+                        .to_array(),
+                    normal: shown
+                        .transform
+                        .transform_vector3(Vec3::from(v.normal))
+                        .to_array(),
+                    uv: v.uv,
+                }
+            }));
             indices.extend(model.indices.iter().map(|i| i + first_vertex));
             // A part per tissue: the belly in its colour, the tendon pale.
             for part in &model.parts {
